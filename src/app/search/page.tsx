@@ -2,15 +2,26 @@
 import { useState } from 'react';
 import Link from 'next/link';
 
-interface Result {
+interface WebResult {
   title: string;
   url: string;
   content: string;
 }
 
+interface Photo {
+  id: number;
+  url: string;
+  photographer: string;
+  photographer_url: string;
+  src: { medium: string; large: string };
+  alt: string;
+}
+
 export default function SearchPage() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<Result[]>([]);
+  const [mode, setMode] = useState<'web' | 'images'>('web');
+  const [webResults, setWebResults] = useState<WebResult[]>([]);
+  const [imageResults, setImageResults] = useState<Photo[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
 
@@ -18,13 +29,23 @@ export default function SearchPage() {
     if (!query.trim()) return;
     setLoading(true);
     setSearched(true);
-    const res = await fetch('/api/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query })
-    });
-    const data = await res.json();
-    setResults(data);
+
+    if (mode === 'web') {
+      const res = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      setWebResults(await res.json());
+    } else {
+      const res = await fetch('/api/images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      setImageResults(await res.json());
+    }
+
     setLoading(false);
   };
 
@@ -32,9 +53,27 @@ export default function SearchPage() {
     if (e.key === 'Enter') handleSearch();
   };
 
+  const switchMode = (newMode: 'web' | 'images') => {
+    setMode(newMode);
+    setSearched(false);
+    setWebResults([]);
+    setImageResults([]);
+  };
+
+  const tabStyle = (active: boolean) => ({
+    background: active ? '#e0e0e0' : 'transparent',
+    color: active ? '#0a0a0a' : '#555',
+    border: '1px solid #333',
+    padding: '0.4rem 1rem',
+    fontFamily: 'monospace',
+    fontSize: '0.8rem',
+    fontWeight: 700,
+    cursor: 'pointer',
+    borderRadius: '4px'
+  });
+
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#e0e0e0', fontFamily: 'monospace' }}>
-      {/* Header */}
       <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '2rem 0' }}>
         <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 1.5rem' }}>
           <img src="https://file-hosting.dashnexpages.net/manitec/logo.png" alt="Manitec Logo" style={{ height: '48px', marginBottom: '1rem' }} />
@@ -49,74 +88,76 @@ export default function SearchPage() {
         </div>
       </header>
 
-      {/* Search */}
       <section style={{ padding: '2.5rem 0', borderBottom: '1px solid #1a1a1a' }}>
-        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 1.5rem', display: 'flex', gap: '0.75rem' }}>
-          <input
-            type="text"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder="SEARCH_>"
-            style={{
-              flex: 1,
-              background: '#111',
-              border: '1px solid #333',
-              color: '#e0e0e0',
-              padding: '0.75rem 1rem',
-              fontFamily: 'monospace',
-              fontSize: '1rem',
-              outline: 'none',
-              borderRadius: '4px'
-            }}
-          />
-          <button
-            onClick={handleSearch}
-            style={{
-              background: '#e0e0e0',
-              color: '#0a0a0a',
-              border: 'none',
-              padding: '0.75rem 1.5rem',
-              fontFamily: 'monospace',
-              fontWeight: 700,
-              fontSize: '0.875rem',
-              cursor: 'pointer',
-              borderRadius: '4px'
-            }}
-          >
-            EXECUTE_
-          </button>
-        </div>
-        <div style={{ maxWidth: '860px', margin: '0.75rem auto 0', padding: '0 1.5rem' }}>
-          <Link href="/" style={{ color: '#555', fontSize: '0.75rem', textDecoration: 'none' }}>
-            ← Switch to Kairos Answer Mode
-          </Link>
+        <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 1.5rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '0.75rem' }}>
+            <input
+              type="text"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              onKeyDown={handleKey}
+              placeholder="SEARCH_>"
+              style={{
+                flex: 1,
+                background: '#111',
+                border: '1px solid #333',
+                color: '#e0e0e0',
+                padding: '0.75rem 1rem',
+                fontFamily: 'monospace',
+                fontSize: '1rem',
+                outline: 'none',
+                borderRadius: '4px'
+              }}
+            />
+            <button onClick={handleSearch} style={{ background: '#e0e0e0', color: '#0a0a0a', border: 'none', padding: '0.75rem 1.5rem', fontFamily: 'monospace', fontWeight: 700, fontSize: '0.875rem', cursor: 'pointer', borderRadius: '4px' }}>
+              EXECUTE_
+            </button>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <button style={tabStyle(mode === 'web')} onClick={() => switchMode('web')}>WEB</button>
+            <button style={tabStyle(mode === 'images')} onClick={() => switchMode('images')}>IMAGES</button>
+            <Link href="/" style={{ color: '#555', fontSize: '0.75rem', textDecoration: 'none', marginLeft: '1rem' }}>← Kairos Answer Mode</Link>
+          </div>
         </div>
       </section>
 
-      {/* Results */}
       <section style={{ maxWidth: '860px', margin: '0 auto', padding: '2rem 1.5rem' }}>
         {loading && <p style={{ color: '#555' }}>// Scanning index...</p>}
-        {!loading && searched && results.length === 0 && (
-          <p style={{ color: '#555' }}>// No results found. Try a different query.</p>
+
+        {!loading && searched && mode === 'web' && webResults.length === 0 && (
+          <p style={{ color: '#555' }}>// No results found.</p>
         )}
-        {!loading && results.map((r, i) => (
+
+        {!loading && mode === 'web' && webResults.map((r, i) => (
           <div key={i} style={{ marginBottom: '1.75rem', borderLeft: '2px solid #222', paddingLeft: '1rem' }}>
-            <a
-              href={r.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: '#93c5fd', textDecoration: 'none', fontWeight: 600, fontSize: '1rem', display: 'block', marginBottom: '0.25rem' }}
-            >
+            <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: '#93c5fd', textDecoration: 'none', fontWeight: 600, fontSize: '1rem', display: 'block', marginBottom: '0.25rem' }}>
               {r.title}
             </a>
             <span style={{ color: '#4ade80', fontSize: '0.75rem', display: 'block', marginBottom: '0.5rem' }}>{r.url}</span>
             <p style={{ color: '#999', fontSize: '0.875rem', margin: 0, lineHeight: 1.6 }}>{r.content}</p>
           </div>
         ))}
+
+        {!loading && searched && mode === 'images' && imageResults.length === 0 && (
+          <p style={{ color: '#555' }}>// No images found.</p>
+        )}
+
+        {!loading && mode === 'images' && imageResults.length > 0 && (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem' }}>
+              {imageResults.map(photo => (
+                <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', borderRadius: '6px', overflow: 'hidden', border: '1px solid #222' }}>
+                  <img src={photo.src.medium} alt={photo.alt || photo.photographer} style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }} />
+                  <div style={{ padding: '0.5rem', background: '#111', fontSize: '0.7rem', color: '#555' }}>
+                    Photo by <a href={photo.photographer_url} target="_blank" rel="noopener noreferrer" style={{ color: '#4ade80', textDecoration: 'none' }}>{photo.photographer}</a> on Pexels
+                  </div>
+                </a>
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
-      {/* Footer */}
       <footer style={{ borderTop: '1px solid #1a1a1a', padding: '2rem 0', textAlign: 'center', color: '#444', fontSize: '0.75rem' }}>
         <div style={{ marginBottom: '1rem' }}>
           <a href="https://www.buymeacoffee.com/_Joe" target="_blank" rel="noopener noreferrer">
@@ -133,9 +174,7 @@ export default function SearchPage() {
       </footer>
 
       <style>{`
-        @keyframes blink {
-          50% { opacity: 0; }
-        }
+        @keyframes blink { 50% { opacity: 0; } }
       `}</style>
     </div>
   );
