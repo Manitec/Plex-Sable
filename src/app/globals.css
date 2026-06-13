@@ -1,26 +1,71 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg:        #0b0b0a;
+  --surface:   #111110;
+  --surface-2: #161614;
+  --border:    rgba(237,232,223,0.07);
+  --text:      #ede8df;
+  --muted:     #7a7670;
+  --accent:    #c8956b;
+  --accent-2:  #7a5c8a;
+  --font-display: 'EB Garamond', Georgia, serif;
+  --font-mono:    'JetBrains Mono', monospace;
+  --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
+  --background: var(--bg);
+  --foreground: var(--text);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* ambient glow */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 50% at 15% 80%, rgba(200,149,107,0.055) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 60% at 85% 10%, rgba(122,92,138,0.07)  0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 50% 50%, rgba(200,149,107,0.02)  0%, transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* scroll reveal */
+.fade-in { opacity: 1; }
+@supports (animation-timeline: scroll()) {
+  .fade-in {
+    opacity: 0;
+    animation: reveal linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 80%;
+  }
+}
+@keyframes reveal { to { opacity: 1; } }
+
+/* glyph breathe */
+@keyframes breathe {
+  0%, 100% { opacity: 0.75; text-shadow: 0 0 40px rgba(200,149,107,0.2); }
+  50%       { opacity: 1;   text-shadow: 0 0 80px rgba(200,149,107,0.35); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(1); }
+  50%       { opacity: 0.8; transform: scale(1.3); }
 }
