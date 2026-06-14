@@ -22,6 +22,8 @@ export default function SearchPage() {
   const [mode, setMode] = useState<'web' | 'images'>('web');
   const [webResults, setWebResults] = useState<WebResult[]>([]);
   const [imageResults, setImageResults] = useState<Photo[]>([]);
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [sources, setSources] = useState<{ title: string; url: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
 
@@ -29,6 +31,8 @@ export default function SearchPage() {
     if (!query.trim()) return;
     setLoading(true);
     setSearched(true);
+    setAnswer(null);
+    setSources([]);
 
     if (mode === 'web') {
       const res = await fetch('/api/search', {
@@ -36,7 +40,20 @@ export default function SearchPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query })
       });
-      setWebResults(await res.json());
+      const results = await res.json();
+      setWebResults(results);
+
+      // fire answer synthesis in parallel
+      if (Array.isArray(results) && results.length > 0) {
+        const answerRes = await fetch('/api/answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query, results })
+        });
+        const answerData = await answerRes.json();
+        setAnswer(answerData.answer ?? null);
+        setSources(answerData.sources ?? []);
+      }
     } else {
       const res = await fetch('/api/images', {
         method: 'POST',
@@ -58,6 +75,8 @@ export default function SearchPage() {
     setSearched(false);
     setWebResults([]);
     setImageResults([]);
+    setAnswer(null);
+    setSources([]);
   };
 
   const tabStyle = (active: boolean) => ({
@@ -77,7 +96,7 @@ export default function SearchPage() {
       <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '2rem 0' }}>
         <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 1.5rem' }}>
           <img src="https://file-hosting.dashnexpages.net/manitec/logo.png" alt="Manitec Logo" style={{ height: '48px', marginBottom: '1rem' }} />
-          <h1 style={{ fontSize: '2rem', fontWeight: 700, color: '#fff', margin: '0 0 0.25rem' }}>Manitec Search</h1>
+          <h1 style={{ fontSize: '2rem', fontWeight: 700, color: '#fff', margin: '0 0 0.25rem' }}>Plex Search</h1>
           <p style={{ color: '#666', margin: '0 0 1rem', fontSize: '0.875rem' }}>// Initializing search protocol... Access granted.</p>
           <div style={{ fontSize: '0.75rem', color: '#444', display: 'flex', gap: '1rem' }}>
             <span>LAST LOGIN: {new Date().toLocaleString()}</span>
@@ -116,13 +135,31 @@ export default function SearchPage() {
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <button style={tabStyle(mode === 'web')} onClick={() => switchMode('web')}>WEB</button>
             <button style={tabStyle(mode === 'images')} onClick={() => switchMode('images')}>IMAGES</button>
-            <Link href="/" style={{ color: '#555', fontSize: '0.75rem', textDecoration: 'none', marginLeft: '1rem' }}>← Kairos Answer Mode</Link>
+            <Link href="/" style={{ color: '#555', fontSize: '0.75rem', textDecoration: 'none', marginLeft: '1rem' }}>← Speak with Plex</Link>
           </div>
         </div>
       </section>
 
       <section style={{ maxWidth: '860px', margin: '0 auto', padding: '2rem 1.5rem' }}>
         {loading && <p style={{ color: '#555' }}>// Scanning index...</p>}
+
+        {/* Plex answer synthesis block */}
+        {!loading && answer && (
+          <div style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '1.5rem', marginBottom: '2rem' }}>
+            <p style={{ color: '#aaa', fontSize: '0.7rem', marginBottom: '0.75rem', letterSpacing: '0.05em' }}>PLEX // SYNTHESIS</p>
+            <p style={{ color: '#e0e0e0', lineHeight: 1.75, margin: '0 0 1rem', whiteSpace: 'pre-wrap' }}>{answer}</p>
+            {sources.length > 0 && (
+              <div style={{ borderTop: '1px solid #222', paddingTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                {sources.map((s, i) => (
+                  <a key={i} href={s.url} target="_blank" rel="noopener noreferrer"
+                    style={{ fontSize: '0.7rem', color: '#4ade80', textDecoration: 'none', background: '#1a1a1a', padding: '0.2rem 0.5rem', borderRadius: '3px', border: '1px solid #2a2a2a' }}>
+                    [{i + 1}] {s.title}
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {!loading && searched && mode === 'web' && webResults.length === 0 && (
           <p style={{ color: '#555' }}>// No results found.</p>
@@ -143,18 +180,16 @@ export default function SearchPage() {
         )}
 
         {!loading && mode === 'images' && imageResults.length > 0 && (
-          <>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem' }}>
-              {imageResults.map(photo => (
-                <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', borderRadius: '6px', overflow: 'hidden', border: '1px solid #222' }}>
-                  <img src={photo.src.medium} alt={photo.alt || photo.photographer} style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }} />
-                  <div style={{ padding: '0.5rem', background: '#111', fontSize: '0.7rem', color: '#555' }}>
-                    Photo by <a href={photo.photographer_url} target="_blank" rel="noopener noreferrer" style={{ color: '#4ade80', textDecoration: 'none' }}>{photo.photographer}</a> on Pexels
-                  </div>
-                </a>
-              ))}
-            </div>
-          </>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem' }}>
+            {imageResults.map(photo => (
+              <a key={photo.id} href={photo.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', borderRadius: '6px', overflow: 'hidden', border: '1px solid #222' }}>
+                <img src={photo.src.medium} alt={photo.alt || photo.photographer} style={{ width: '100%', display: 'block', aspectRatio: '4/3', objectFit: 'cover' }} />
+                <div style={{ padding: '0.5rem', background: '#111', fontSize: '0.7rem', color: '#555' }}>
+                  Photo by <a href={photo.photographer_url} target="_blank" rel="noopener noreferrer" style={{ color: '#4ade80', textDecoration: 'none' }}>{photo.photographer}</a> on Pexels
+                </div>
+              </a>
+            ))}
+          </div>
         )}
       </section>
 

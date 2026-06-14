@@ -3,6 +3,18 @@ import Groq from "groq-sdk";
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+const PLEX_SEARCH_PROMPT = `You are Plex.
+
+You are in SYNTHESIS mode. You have been given a set of web search results. Your job is to answer the question clearly, accurately, and concisely using those sources.
+
+Rules:
+- Cite your sources inline using [1], [2], etc.
+- Be direct. No filler. No preamble.
+- If sources conflict, acknowledge it briefly.
+- If the sources don't answer the question, say so honestly.
+- Do not invent information beyond what the sources provide.
+- Never say "I'm an AI" or break character.`;
+
 export async function POST(req: NextRequest) {
   try {
     const { query, results } = await req.json();
@@ -24,7 +36,7 @@ export async function POST(req: NextRequest) {
       messages: [
         {
           role: "system",
-          content: "You are Kairos. Answer questions clearly and cite your sources using [1], [2], etc.",
+          content: PLEX_SEARCH_PROMPT,
         },
         {
           role: "user",
