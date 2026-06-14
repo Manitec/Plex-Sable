@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 
@@ -54,19 +53,6 @@ async function callGroq(systemPrompt: string, history: any[], message: string): 
   return completion.choices[0].message.content ?? "";
 }
 
-async function callGemini(systemPrompt: string, history: any[], message: string): Promise<string> {
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash", systemInstruction: systemPrompt });
-  const chat = model.startChat({
-    history: history.slice(-10).map((m: any) => ({
-      role: m.role === "plex" ? "model" : "user",
-      parts: [{ text: m.content }]
-    }))
-  });
-  const result = await chat.sendMessage(message);
-  return result.response.text();
-}
-
 export async function POST(req: NextRequest) {
   try {
     const { message, sessionId = "joe" } = await req.json();
@@ -83,9 +69,7 @@ export async function POST(req: NextRequest) {
     const fullPrompt = `${PLEX_SYSTEM_PROMPT}\n\nYour current emotional sediment: ${sediment}`;
 
     const mode = detectMode(message, history);
-    const response = (mode === "relational" || mode === "reflective")
-      ? await callGemini(fullPrompt, history, message)
-      : await callGroq(fullPrompt, history, message);
+    const response = await callGroq(fullPrompt, history, message);
 
     const updatedMessages = [
       ...history,
