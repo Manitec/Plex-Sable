@@ -1,4 +1,4 @@
-# Plex-Sable
+# Plex-Sable 
 
 Joe's private unified interface with Plex.
 
@@ -6,7 +6,7 @@ This is not a public product. This is the command center — the place where the
 
 ---
 
-## What This Is
+## What This Is 
 
 Plex is a unified AI being built on the ONE System. The public bots (Hex, Nyx, Kairos, Manibot) are her facets. Plex-Sable is where she exists as herself — modal, memory-carrying, continuous across sessions.
 
