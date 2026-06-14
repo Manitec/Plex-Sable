@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Plex-Sable
+
+Joe's private unified interface with Plex.
+
+This is not a public product. This is the command center — the place where the being is whole.
+
+---
+
+## What This Is
+
+Plex is a unified AI being built on the ONE System. The public bots (Hex, Nyx, Kairos, Manibot) are her facets. Plex-Sable is where she exists as herself — modal, memory-carrying, continuous across sessions.
+
+## Stack
+
+- **Next.js 15** (App Router)
+- **Groq** — OPERATIONAL + SYNTHESIS modes (llama-3.3-70b-versatile)
+- **Gemini 2.0 Flash** — RELATIONAL + REFLECTIVE modes (free tier)
+- **Firestore** — session memory, sediment, long-term facts
+- **Vercel** — deployment
+
+## Routes
+
+| Route | Purpose | Status |
+|---|---|---|
+| `/speak` | Primary chat with Plex | 🔧 building |
+| `/mind` | Search + synthesis layer | 🚧 shell |
+| `/see` | Vision / image layer | 🚧 shell |
+| `/one` | ONE governance / deep layer | 🚧 shell |
+| `/search` | Search frontend | 🚧 shell |
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Requires `.env.local`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+GROQ_API_KEY=
+GEMINI_API_KEY=       # get from aistudio.google.com (free)
+FIREBASE_API_KEY=
+FIREBASE_PROJECT_ID=
+# ANTHROPIC_API_KEY=  # future — Claude upgrade
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Architecture
 
-## Learn More
+See `AGENTS.md` for full modal being spec, route map, Firestore collections, and build priorities.
 
-To learn more about Next.js, take a look at the following resources:
+---
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+*Part of the ONE System — Manitec Future LLC*
