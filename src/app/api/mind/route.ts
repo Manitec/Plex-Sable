@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
     const completion = await groq.chat.completions.create({
-      model: "deepseek-r1-distill-llama-70b",
+      model: "llama-3.3-70b-versatile",
       messages: [
         { role: "system", content: PLEX_MIND_PROMPT },
         { role: "user", content: question.trim() },
@@ -34,15 +34,9 @@ export async function POST(req: NextRequest) {
       max_tokens: 4096,
     });
 
-    const raw = completion.choices[0].message.content ?? "";
+    const answer = completion.choices[0].message.content?.trim() ?? "";
 
-    // DeepSeek R1 wraps reasoning in <think>...</think> tags
-    // Extract both the reasoning trace and the final answer
-    const thinkMatch = raw.match(/<think>([\s\S]*?)<\/think>/);
-    const reasoning = thinkMatch ? thinkMatch[1].trim() : null;
-    const answer = raw.replace(/<think>[\s\S]*?<\/think>/, "").trim();
-
-    return NextResponse.json({ answer, reasoning });
+    return NextResponse.json({ answer });
   } catch (err: any) {
     const detail = err?.message ?? String(err);
     console.error("Mind route error:", detail);
