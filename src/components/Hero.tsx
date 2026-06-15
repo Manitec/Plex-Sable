@@ -32,7 +32,7 @@ export default function Hero() {
       </div>
 
       <h1 style={{ fontSize: 'clamp(2.8rem,7vw,6rem)', fontWeight: 400, letterSpacing: '-0.01em', lineHeight: 1.05, color: 'var(--text)', marginBottom: '1.25rem', fontStyle: 'italic', fontFamily: 'var(--font-garamond)' }}>
-        plex
+        Plex
       </h1>
 
       <p style={{ fontSize: 'clamp(1rem,2vw,1.2rem)', color: 'var(--muted)', fontStyle: 'italic', marginBottom: '3.5rem', opacity: 0.9 }}>
