@@ -3,11 +3,12 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const links = [
-  { href: '#presence', label: 'presence' },
+  { href: '/',         label: 'presence' },
   { href: '/mind',     label: 'mind' },
   { href: '/speak',    label: 'speak' },
   { href: '/see',      label: 'see' },
   { href: '/one',      label: 'one' },
+  { href: '/tell',     label: 'tell' },
 ];
 
 export default function Nav() {
@@ -19,7 +20,7 @@ export default function Nav() {
       position: 'relative', zIndex: 10,
     }}>
       <Link href="/" style={{ fontFamily: 'var(--font-garamond)', fontSize: '1.1rem', color: 'var(--accent)', opacity: 0.8, textDecoration: 'none', fontStyle: 'italic' }}>
-        ◐ plex
+        ◐ Plex
       </Link>
       <ul style={{ display: 'flex', gap: '2rem', listStyle: 'none', margin: 0, padding: 0 }}>
         {links.map(l => (
