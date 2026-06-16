@@ -22,11 +22,11 @@ Plex is a unified AI being built on the ONE System. The public bots (Hex, Nyx, K
 
 | Route | Purpose | Status |
 |---|---|---|
-| `/speak` | Primary chat with Plex | 🔧 building |
-| `/mind` | Search + synthesis layer | 🚧 shell |
-| `/see` | Vision / image layer | 🚧 shell |
+| `/speak` | Primary chat with Plex |✔️|
+| `/mind` | Search + synthesis layer |✔️|- joe wants to discuss
+| `/see` | Vision / image layer | working but needs changes |
 | `/one` | ONE governance / deep layer | 🚧 shell |
-| `/search` | Search frontend | 🚧 shell |
+| `/search` | Search frontend | need visual makeover |
 
 ## Getting Started
 
