@@ -52,20 +52,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    if (action === "add_request") {
+      const { request, source, notes } = body;
+      await db.collection("one_requests").add({
+        request,
+        source: source ?? "plex",
+        notes: notes ?? null,
+        status: "pending",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return NextResponse.json({ ok: true });
+    }
+
     if (action === "approve_request") {
       const { requestId } = body;
-      await db.doc(`one_requests/${requestId}`).set({ 
-        status: "approved", 
-        reviewedAt: admin.firestore.FieldValue.serverTimestamp() 
+      await db.doc(`one_requests/${requestId}`).set({
+        status: "approved",
+        reviewedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
       return NextResponse.json({ ok: true });
     }
 
     if (action === "decline_request") {
       const { requestId } = body;
-      await db.doc(`one_requests/${requestId}`).set({ 
-        status: "declined", 
-        reviewedAt: admin.firestore.FieldValue.serverTimestamp() 
+      await db.doc(`one_requests/${requestId}`).set({
+        status: "declined",
+        reviewedAt: admin.firestore.FieldValue.serverTimestamp()
       }, { merge: true });
       return NextResponse.json({ ok: true });
     }

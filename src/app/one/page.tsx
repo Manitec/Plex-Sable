@@ -11,6 +11,17 @@ type ONEState = {
   log: any[];
 };
 
+const TOOLS = [
+  { path: '/speak', label: 'Speak — modal conversational interface' },
+  { path: '/search', label: 'Search — web + synthesis' },
+  { path: '/see', label: 'See — vision, image input' },
+  { path: '/mind', label: 'Mind — deep reasoning' },
+  { path: '/dreams', label: 'Dreams — sediment journal' },
+  { path: '/tell', label: 'Tell — confession booth' },
+  { path: '/one', label: 'One — system governance' },
+  { path: '/api/sediment', label: 'Sediment API — Firestore read/write' },
+];
+
 export default function OnePage() {
   const [state, setState] = useState<ONEState | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,7 +44,6 @@ export default function OnePage() {
       body: JSON.stringify({ action: 'add_log', entry: newLogEntry.trim(), author: 'joe' }),
     });
     setNewLogEntry('');
-    // Refresh
     const r = await fetch('/api/one');
     setState(await r.json());
   };
@@ -58,7 +68,7 @@ export default function OnePage() {
         <h1 style={{ fontSize: 'clamp(2rem,5vw,4rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', marginBottom: '1rem', fontFamily: 'var(--font-garamond)' }}>one</h1>
         <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '3rem', maxWidth: 640 }}>The heartbeat. Governance. Memory. This is where the system looks at itself.</p>
 
-        {/* Section 1: System Pulse */}
+        {/* System Pulse */}
         <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' }}>
           <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' }}>System Pulse</h2>
           <div style={{ display: 'grid', gap: '1.5rem' }}>
@@ -81,7 +91,7 @@ export default function OnePage() {
           </div>
         </section>
 
-        {/* Section 2: Governance */}
+        {/* Governance */}
         <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' }}>
           <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' }}>Governance</h2>
           <div>
@@ -95,7 +105,7 @@ export default function OnePage() {
           </div>
         </section>
 
-        {/* Section 3: Plex Request Queue */}
+        {/* Request Queue */}
         <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' }}>
           <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' }}>Request Queue</h2>
           {state.requests.length === 0 ? (
@@ -105,26 +115,29 @@ export default function OnePage() {
               {state.requests.map((req: any) => (
                 <div key={req.id} style={{ border: '1px solid var(--border)', padding: '1rem', borderRadius: 2 }}>
                   <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>{req.request ?? '(no text)'}</p>
-                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--muted)' }}>Status: {req.status ?? 'pending'}</p>
+                  <p style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--muted)' }}>
+                    Source: {req.source ?? 'unknown'} · Status: {req.status ?? 'pending'}
+                    {req.notes ? ` · ${req.notes}` : ''}
+                  </p>
                 </div>
               ))}
             </div>
           )}
         </section>
 
-        {/* Section 4: Tools Registry */}
+        {/* Tools */}
         <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' }}>
           <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' }}>Tools</h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {['/speak', '/search', '/see', '/mind', '/one'].map(tool => (
-              <p key={tool} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text)' }}>
-                {tool} <span style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>— active</span>
+            {TOOLS.map(tool => (
+              <p key={tool.path} style={{ fontFamily: 'var(--font-mono)', fontSize: '0.8rem', color: 'var(--text)' }}>
+                {tool.path} <span style={{ color: 'var(--muted)', fontSize: '0.7rem' }}>— {tool.label.split(' — ')[1]}</span>
               </p>
             ))}
           </div>
         </section>
 
-        {/* Section 5: ONE Log */}
+        {/* ONE Log */}
         <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' }}>
           <h2 style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' }}>ONE Log</h2>
           {state.log.length === 0 ? (
