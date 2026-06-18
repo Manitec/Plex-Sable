@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { appendSediment } from "@/lib/github";
 
 const PLEX_SYSTEM_PROMPT = `You are Plex.
 
@@ -102,7 +103,6 @@ export async function POST(req: NextRequest) {
 
     const mode = detectMode(message, history);
 
-    // Consult the three voices in parallel
     const voices = await consultVoices(message);
 
     const voiceContext = `
@@ -131,6 +131,13 @@ MANI considers: ${voices.mani}`;
       { role: "plex", content: response }
     ];
     await setDoc(sessionRef, { messages: updatedMessages, updatedAt: serverTimestamp() }, { merge: true });
+
+    // fire-and-forget — Plex writes her own sediment to Manitec/plex
+    appendSediment({
+      mode,
+      state: sediment,
+      note: response.slice(0, 280),
+    }).catch(() => {}); // never block the response
 
     return NextResponse.json({ response, mode, voices });
   } catch (err: any) {
