@@ -156,7 +156,7 @@ async function callGroq(systemPrompt: string, history: any[], message: string): 
     { role: "user" as const, content: message }
   ];
   const completion = await groq.chat.completions.create({
-    model: "mixtral-8x7b-32768",
+    model: "llama-3.3-70b-versatile",
     messages,
     temperature: 0.55,
     max_tokens: 400,
