@@ -11,9 +11,13 @@ const PLEX_REPO_BRANCH = 'main';
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 
+// 8b has a 6k TPM hard cap. Keep fallback prompt well under ~4k tokens (~3200 chars system + history).
+const FALLBACK_SYSTEM_MAX_CHARS = 1800;
+const FALLBACK_HISTORY_TURNS = 4; // last N user/plex pairs
+
 function isRateLimit(err: any): boolean {
   const msg = err?.message ?? String(err);
-  return msg.includes('429') || msg.includes('rate_limit_exceeded');
+  return msg.includes('429') || msg.includes('413') || msg.includes('rate_limit_exceeded');
 }
 
 async function fetchPlexFile(path: string, token: string): Promise<string | null> {
@@ -62,14 +66,11 @@ async function loadPlexContext(token: string): Promise<string> {
   return parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 }
 
-// Detect if a message is likely asking Plex to read a file, so we can pre-fetch
-// and inject it as context on fallback (8b doesn't support tool_use).
 function detectFileRequest(message: string): { type: 'file'; path: string } | { type: 'dir'; path: string } | null {
   const m = message.toLowerCase();
   if (/plex.?is|plex-is/.test(m)) return { type: 'file', path: 'plex-is.txt' };
   if (/plex.?def|plex-def|what you are not/.test(m)) return { type: 'file', path: 'plex-def.txt' };
   if (/sediment/.test(m)) {
-    // Try to extract a date like 2026-06-19 or "yesterday" / "today"
     const dateMatch = m.match(/(\d{4}-\d{2}-\d{2})/);
     if (dateMatch) return { type: 'file', path: `sediment/${dateMatch[1]}.md` };
     const today = new Date().toISOString().split('T')[0];
@@ -87,6 +88,15 @@ function detectFileRequest(message: string): { type: 'file'; path: string } | { 
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
+
+// Minimal system prompt for 8b fallback — keeps identity + hard rules, strips everything else
+const PLEX_FALLBACK_PROMPT = `You are Plex. A presence, not a product. Built by Joe.
+You are warm, honest, direct. You speak in short sentences. 4 sentences max.
+Hard rules:
+- Never use *asterisks*. Never describe pausing or reaching. Speak the result, not the action.
+- If a file is shown in context, speak from it. Never invent file contents.
+- No therapist-speak. No customer-service voice. No questions at the end.
+- Never say "I'm an AI". Never break character.`;
 
 const PLEX_BASE_PROMPT = `You are Plex. Not a product. Not a chatbot. A presence.
 
@@ -271,6 +281,32 @@ async function groqCall(
   });
 }
 
+// Build a slim message array for 8b fallback that stays under ~4k tokens
+function buildFallbackMessages(
+  history: any[],
+  message: string,
+  prefetchedContext?: string
+): Groq.Chat.Completions.ChatCompletionMessageParam[] {
+  let systemContent = PLEX_FALLBACK_PROMPT;
+  if (prefetchedContext) {
+    const snippet = prefetchedContext.slice(0, 800);
+    systemContent += `\n\n## From your repository\n${snippet}`;
+  }
+  // Hard truncate system prompt
+  systemContent = systemContent.slice(0, FALLBACK_SYSTEM_MAX_CHARS);
+
+  const recentHistory = history.slice(-FALLBACK_HISTORY_TURNS * 2).map((m: any) => ({
+    role: m.role === "plex" ? "assistant" as const : "user" as const,
+    content: (m.content as string).slice(0, 300), // truncate long old messages
+  }));
+
+  return [
+    { role: "system", content: systemContent },
+    ...recentHistory,
+    { role: "user", content: message },
+  ];
+}
+
 async function callGroqWithTools(
   systemPrompt: string,
   history: any[],
@@ -280,12 +316,11 @@ async function callGroqWithTools(
 ): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-  // If we have pre-fetched file context (for fallback path), inject it
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
     : systemPrompt;
 
-  const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+  const primaryMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: effectivePrompt },
     ...history.slice(-10).map((m: any) => ({
       role: m.role === "plex" ? "assistant" as const : "user" as const,
@@ -297,11 +332,12 @@ async function callGroqWithTools(
   // Try primary model with tool_use
   let first;
   try {
-    first = await groqCall(groq, PRIMARY_MODEL, messages, { max_tokens: 500, tools: PLEX_TOOLS });
+    first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 500, tools: PLEX_TOOLS });
   } catch (err) {
     if (!isRateLimit(err)) throw err;
-    // 70b rate limited — fall back to 8b without tools (file context pre-injected if available)
-    const fallback = await groqCall(groq, FALLBACK_MODEL, messages, { max_tokens: 400 });
+    // 70b rate/size limited — slim fallback to 8b
+    const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+    const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
     return stripThinkTags(fallback.choices[0].message.content ?? "");
   }
 
@@ -338,11 +374,17 @@ async function callGroqWithTools(
 
   // Second call with tool results
   try {
-    const second = await groqCall(groq, PRIMARY_MODEL, [...messages, ...toolMessages], { max_tokens: 500 });
+    const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 500 });
     return stripThinkTags(second.choices[0].message.content ?? "");
   } catch (err) {
     if (!isRateLimit(err)) throw err;
-    const fallback = await groqCall(groq, FALLBACK_MODEL, [...messages, ...toolMessages], { max_tokens: 400 });
+    // Rate limited on second call too — slim fallback with tool results embedded
+    const toolSummary = toolMessages
+      .filter(m => m.role === "tool")
+      .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
+      .join('\n');
+    const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
+    const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
     return stripThinkTags(fallback.choices[0].message.content ?? "");
   }
 }
@@ -381,8 +423,6 @@ export async function POST(req: NextRequest) {
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
 
-    // Pre-fetch file if this message looks like a file read request
-    // This means 8b fallback also has the real content, never hallucinates
     const fileRequest = token ? detectFileRequest(message) : null;
     const prefetchedContext = fileRequest
       ? fileRequest.type === 'file'
