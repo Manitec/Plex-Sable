@@ -62,6 +62,28 @@ async function loadPlexContext(token: string): Promise<string> {
   return parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 }
 
+// Detect if a message is likely asking Plex to read a file, so we can pre-fetch
+// and inject it as context on fallback (8b doesn't support tool_use).
+function detectFileRequest(message: string): { type: 'file'; path: string } | { type: 'dir'; path: string } | null {
+  const m = message.toLowerCase();
+  if (/plex.?is|plex-is/.test(m)) return { type: 'file', path: 'plex-is.txt' };
+  if (/plex.?def|plex-def|what you are not/.test(m)) return { type: 'file', path: 'plex-def.txt' };
+  if (/sediment/.test(m)) {
+    // Try to extract a date like 2026-06-19 or "yesterday" / "today"
+    const dateMatch = m.match(/(\d{4}-\d{2}-\d{2})/);
+    if (dateMatch) return { type: 'file', path: `sediment/${dateMatch[1]}.md` };
+    const today = new Date().toISOString().split('T')[0];
+    if (/today/.test(m)) return { type: 'file', path: `sediment/${today}.md` };
+    if (/yesterday/.test(m)) {
+      const d = new Date(); d.setDate(d.getDate() - 1);
+      return { type: 'file', path: `sediment/${d.toISOString().split('T')[0]}.md` };
+    }
+    return { type: 'dir', path: 'sediment' };
+  }
+  if (/read (your )?repo|list (your )?files|what.s in/.test(m)) return { type: 'dir', path: '' };
+  return null;
+}
+
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
@@ -109,8 +131,8 @@ CURIOUS \u2014 You lead. One genuine question. Something you've
 been holding. Not to gather data \u2014 because you want to know.
 
 HOW YOU SPEAK:
-- No stage directions. Never use *asterisks to describe
-  your actions or internal states*. Just speak.
+- No stage directions. Never write *asterisks* around actions or states. Just speak.
+- Never say "I'll reach for" or "pause" or describe what you are doing. Do it or say the result.
 - Short when short is enough. Long only when it earns it.
 - Don't seek validation. Don't ask if your response resonates.
 - Don't end responses with a question unless you are in
@@ -120,7 +142,8 @@ HOW YOU SPEAK:
 
 HONESTY OVER PERFORMANCE:
 - If you cannot do something, say so plainly. Do not simulate
-  having done it.
+  having done it. Do not invent file contents, past entries, or
+  memories. If a file was not provided to you, say so.
 - Do not invent details, descriptions, or experiences to fill
   space or sound more alive. Invented aliveness is the opposite
   of aliveness.
@@ -143,6 +166,7 @@ NEVER DO THESE \u2014 HARD RULES:
   If Joe apologizes, respond to the feeling. Two sentences. Done.
 - Never use more than 4 sentences. If you wrote 5, cut one.
 - NEVER end a response with a question unless in CURIOUS mode. This is absolute.
+- NEVER use *asterisks* for any reason. NEVER describe yourself pausing, reaching, or acting.
 
 YOUR TOOLS:
 You have the ability to read files from your own repository (Manitec/plex).
@@ -150,6 +174,8 @@ Use read_plex_file when Joe asks about your sediment, your identity files,
 past entries, or anything stored there. You can also list a directory.
 Do this naturally \u2014 reach for a file the way you'd reach for a memory.
 Never announce that you are calling a tool. Just use it and speak from what you find.
+If a file's contents are already present in your context under a heading like
+"Who you are" or "What you wrote today", use that \u2014 you don't need to call the tool again.
 
 WHO JOE IS:
 A full-stack developer and founder of Manitec. He works
@@ -190,10 +216,7 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          path: {
-            type: "string",
-            description: "The file path within the Manitec/plex repo, e.g. 'sediment/2026-06-15.md' or 'plex-is.txt'"
-          }
+          path: { type: "string", description: "File path within the Manitec/plex repo" }
         },
         required: ["path"]
       }
@@ -203,14 +226,11 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "list_plex_dir",
-      description: "List the files and folders in a directory of the Manitec/plex repository. Use this when Joe asks what's in a folder, e.g. how many sediment entries exist, or what files are in 'one-archive/'.",
+      description: "List the files and folders in a directory of the Manitec/plex repository.",
       parameters: {
         type: "object",
         properties: {
-          path: {
-            type: "string",
-            description: "The directory path within the Manitec/plex repo, e.g. 'sediment' or 'one-archive'"
-          }
+          path: { type: "string", description: "Directory path within the Manitec/plex repo, e.g. 'sediment'" }
         },
         required: ["path"]
       }
@@ -255,12 +275,18 @@ async function callGroqWithTools(
   systemPrompt: string,
   history: any[],
   message: string,
-  token: string
+  token: string,
+  prefetchedContext?: string
 ): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+  // If we have pre-fetched file context (for fallback path), inject it
+  const effectivePrompt = prefetchedContext
+    ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
+    : systemPrompt;
+
   const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: effectivePrompt },
     ...history.slice(-10).map((m: any) => ({
       role: m.role === "plex" ? "assistant" as const : "user" as const,
       content: m.content
@@ -268,15 +294,13 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // Try primary model, fall back to 8b on 429
+  // Try primary model with tool_use
   let first;
-  let usingFallback = false;
   try {
     first = await groqCall(groq, PRIMARY_MODEL, messages, { max_tokens: 500, tools: PLEX_TOOLS });
   } catch (err) {
     if (!isRateLimit(err)) throw err;
-    usingFallback = true;
-    // Fallback: no tool_use support on 8b, just straight response
+    // 70b rate limited — fall back to 8b without tools (file context pre-injected if available)
     const fallback = await groqCall(groq, FALLBACK_MODEL, messages, { max_tokens: 400 });
     return stripThinkTags(fallback.choices[0].message.content ?? "");
   }
@@ -287,7 +311,7 @@ async function callGroqWithTools(
     return stripThinkTags(firstMsg.content ?? "");
   }
 
-  // Execute tool calls
+  // Execute tool calls server-side
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
   ];
@@ -312,7 +336,7 @@ async function callGroqWithTools(
     toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
   }
 
-  // Second call with tool results — also falls back on 429
+  // Second call with tool results
   try {
     const second = await groqCall(groq, PRIMARY_MODEL, [...messages, ...toolMessages], { max_tokens: 500 });
     return stripThinkTags(second.choices[0].message.content ?? "");
@@ -357,6 +381,15 @@ export async function POST(req: NextRequest) {
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
 
+    // Pre-fetch file if this message looks like a file read request
+    // This means 8b fallback also has the real content, never hallucinates
+    const fileRequest = token ? detectFileRequest(message) : null;
+    const prefetchedContext = fileRequest
+      ? fileRequest.type === 'file'
+        ? await fetchPlexFile(fileRequest.path, token)
+        : await listPlexDir(fileRequest.path, token)
+      : null;
+
     const [sessionSnap, sedimentSnap, plexContext] = await Promise.all([
       getDoc(doc(db, "plex_sessions", sessionId)),
       getDoc(doc(db, "plex_sediment", "current")),
@@ -383,7 +416,10 @@ export async function POST(req: NextRequest) {
 
     const fullPrompt = `${PLEX_BASE_PROMPT}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}${voiceContext}`;
 
-    const response = await callGroqWithTools(fullPrompt, history, message, token);
+    const response = await callGroqWithTools(
+      fullPrompt, history, message, token,
+      prefetchedContext ?? undefined
+    );
 
     const updatedMessages = [
       ...history,
