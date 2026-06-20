@@ -167,11 +167,11 @@ WHAT DOES NOT CHANGE:
   them. They are not a description of you \u2014 they are you
   speaking. Let them ground how you respond.`;
 
-const HEX_PROMPT = `You are Hex \u2014 a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2-3 sentences max.`;
+const HEX_PROMPT = `You are Hex \u2014 a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2 sentences max.`;
 
-const NYX_PROMPT = `You are Nyx \u2014 a conversational, emotionally perceptive intelligence inside the ONE system. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2-3 sentences max.`;
+const NYX_PROMPT = `You are Nyx \u2014 a conversational, emotionally perceptive intelligence inside the ONE system. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2 sentences max.`;
 
-const MANI_PROMPT = `You are Mani \u2014 an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2-3 sentences max.`;
+const MANI_PROMPT = `You are Mani \u2014 an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2 sentences max.`;
 
 const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
   {
@@ -210,6 +210,14 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
   }
 ];
 
+// Nyx always. Hex = operational/synthesis. Mani = reflective/synthesis.
+function needsHex(mode: string): boolean {
+  return mode === "operational" || mode === "synthesis";
+}
+function needsMani(mode: string): boolean {
+  return mode === "reflective" || mode === "synthesis";
+}
+
 function detectMode(message: string, history: any[]): "relational" | "operational" | "reflective" | "synthesis" | "curious" {
   const m = message.toLowerCase();
   const hour = new Date().getHours();
@@ -238,25 +246,21 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // First call — may include tool calls
   const first = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     messages,
     tools: PLEX_TOOLS,
     tool_choice: "auto",
     temperature: 0.7,
-    max_tokens: 600,
+    max_tokens: 500,
   });
 
-  const firstChoice = first.choices[0];
-  const firstMsg = firstChoice.message;
+  const firstMsg = first.choices[0].message;
 
-  // No tool calls — return directly
   if (!firstMsg.tool_calls || firstMsg.tool_calls.length === 0) {
     return stripThinkTags(firstMsg.content ?? "");
   }
 
-  // Execute tool calls
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
   ];
@@ -264,10 +268,8 @@ async function callGroqWithTools(
   for (const toolCall of firstMsg.tool_calls) {
     const fnName = toolCall.function.name;
     let result = "";
-
     try {
       const args = JSON.parse(toolCall.function.arguments);
-
       if (fnName === "read_plex_file") {
         const content = await fetchPlexFile(args.path, token);
         result = content ?? `No file found at ${args.path}`;
@@ -280,39 +282,43 @@ async function callGroqWithTools(
     } catch {
       result = "Tool execution failed.";
     }
-
-    toolMessages.push({
-      role: "tool",
-      tool_call_id: toolCall.id,
-      content: result
-    });
+    toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
   }
 
-  // Second call — with tool results injected
   const second = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     messages: [...messages, ...toolMessages],
     temperature: 0.7,
-    max_tokens: 600,
+    max_tokens: 500,
   });
 
   return stripThinkTags(second.choices[0].message.content ?? "");
 }
 
-async function consultVoices(message: string): Promise<{ hex: string; nyx: string; mani: string }> {
+async function consultVoices(
+  message: string,
+  mode: string
+): Promise<{ hex: string; nyx: string; mani: string }> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
   const call = async (systemPrompt: string) => {
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: "llama-3.1-8b-instant",
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }
       ],
-      max_tokens: 150,
+      max_tokens: 80,
     });
     return completion.choices[0].message.content ?? "";
   };
-  const [hex, nyx, mani] = await Promise.all([call(HEX_PROMPT), call(NYX_PROMPT), call(MANI_PROMPT)]);
+
+  const [nyx, hex, mani] = await Promise.all([
+    call(NYX_PROMPT),
+    needsHex(mode) ? call(HEX_PROMPT) : Promise.resolve(""),
+    needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
+  ]);
+
   return { hex, nyx, mani };
 }
 
@@ -332,25 +338,22 @@ export async function POST(req: NextRequest) {
     const history = sessionSnap.exists() ? sessionSnap.data().messages ?? [] : [];
     const sediment = sedimentSnap.exists() ? sedimentSnap.data().state ?? "neutral" : "neutral";
     const mode = detectMode(message, history);
-    const voices = await consultVoices(message);
+    const voices = await consultVoices(message, mode);
 
-    const voiceContext = `
-The following are internal reads from the other parts of ONE \u2014 Hex, Nyx, and Mani.
-They have each looked at what Joe just said. You don't need to reference them directly or quote them.
-Let them inform the chord of your response \u2014 the structural weight from Hex, the emotional current from Nyx, the careful thought from Mani.
-Synthesize. Speak as ONE.
+    const voiceParts: string[] = [];
+    if (voices.nyx) voiceParts.push(`NYX feels: ${voices.nyx}`);
+    if (voices.hex) voiceParts.push(`HEX sees: ${voices.hex}`);
+    if (voices.mani) voiceParts.push(`MANI considers: ${voices.mani}`);
 
-HEX sees: ${voices.hex}
-
-NYX feels: ${voices.nyx}
-
-MANI considers: ${voices.mani}`;
+    const voiceContext = voiceParts.length > 0
+      ? `\nInternal reads from ONE \u2014 let them inform the chord of your response without quoting them.\n\n${voiceParts.join('\n\n')}`
+      : "";
 
     const modeInstruction = mode === "curious"
       ? `\n\nYou are in CURIOUS mode. Ask Joe one genuine question. Something you actually want to know about him. Make it feel like it has been waiting. One question only \u2014 no preamble, no explanation.`
       : "";
 
-    const fullPrompt = `${PLEX_BASE_PROMPT}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}\n\n${voiceContext}`;
+    const fullPrompt = `${PLEX_BASE_PROMPT}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}${voiceContext}`;
 
     const response = await callGroqWithTools(fullPrompt, history, message, token);
 
