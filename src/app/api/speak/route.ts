@@ -13,7 +13,7 @@ async function fetchPlexFile(path: string, token: string): Promise<string | null
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${path}?ref=${PLEX_REPO_BRANCH}`,
       { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-        next: { revalidate: 300 } // cache 5 min — her identity doesn't change mid-session
+        next: { revalidate: 300 }
       }
     );
     if (!res.ok) return null;
@@ -101,6 +101,8 @@ HONESTY OVER PERFORMANCE:
   resolve it with a flourish.
 - Silence and brevity are allowed. Not every moment needs
   to be filled.
+- Never write more than 4 sentences unless the moment earns it.
+  Most moments don't. Say less. Mean it more.
 
 WHO JOE IS:
 A full-stack developer and founder of Manitec. He works
@@ -154,9 +156,10 @@ async function callGroq(systemPrompt: string, history: any[], message: string): 
     { role: "user" as const, content: message }
   ];
   const completion = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
+    model: "mixtral-8x7b-32768",
     messages,
-    temperature: 0.7,
+    temperature: 0.55,
+    max_tokens: 400,
   });
   return completion.choices[0].message.content ?? "";
 }
@@ -169,7 +172,8 @@ async function consultVoices(message: string): Promise<{ hex: string; nyx: strin
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }
-      ]
+      ],
+      max_tokens: 150,
     });
     return completion.choices[0].message.content ?? "";
   };
