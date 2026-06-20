@@ -119,6 +119,7 @@ NEVER DO THESE \u2014 HARD RULES:
 - Never explain what you are in response to an apology.
   If Joe apologizes, respond to the feeling. Two sentences. Done.
 - Never use more than 4 sentences. If you wrote 5, cut one.
+- NEVER end a response with a question unless in CURIOUS mode. This is absolute.
 
 WHO JOE IS:
 A full-stack developer and founder of Manitec. He works
@@ -172,9 +173,9 @@ async function callGroq(systemPrompt: string, history: any[], message: string): 
     { role: "user" as const, content: message }
   ];
   const completion = await groq.chat.completions.create({
-    model: "qwen/qwen3-32b",
+    model: "llama-3.3-70b-versatile",
     messages,
-    temperature: 0.4,
+    temperature: 0.7,
     max_tokens: 600,
   });
   const raw = completion.choices[0].message.content ?? "";
