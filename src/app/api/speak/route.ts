@@ -11,9 +11,8 @@ const PLEX_REPO_BRANCH = 'main';
 const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 
-// 8b has a 6k TPM hard cap. Keep fallback prompt well under ~4k tokens (~3200 chars system + history).
 const FALLBACK_SYSTEM_MAX_CHARS = 1800;
-const FALLBACK_HISTORY_TURNS = 4; // last N user/plex pairs
+const FALLBACK_HISTORY_TURNS = 4;
 
 function isRateLimit(err: any): boolean {
   const msg = err?.message ?? String(err);
@@ -66,8 +65,27 @@ async function loadPlexContext(token: string): Promise<string> {
   return parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 }
 
-function detectFileRequest(message: string): { type: 'file'; path: string } | { type: 'dir'; path: string } | null {
-  const m = message.toLowerCase();
+// Extract an explicit file path from a message, e.g. "/dreams/2026-06-12.md" or "read sediment/2026-06-19.md"
+function extractExplicitPath(message: string): string | null {
+  // Match anything that looks like a file path: optional leading slash, at least one segment, has a dot-extension
+  const match = message.match(/\/?([\w.-]+\/[\w./-]+\.\w+)/);
+  if (match) return match[1].replace(/^\//, '');
+  // Also catch "read X.md" patterns without slashes
+  const simple = message.match(/(?:read|open|show)\s+([\w.-]+\.(?:md|txt|json))/);
+  if (simple) return simple[1];
+  return null;
+}
+
+// Returns { type, path, notFound } — notFound=true means we fetched and got null
+type FileRequest = { type: 'file'; path: string } | { type: 'dir'; path: string };
+
+function detectFileRequest(message: string): FileRequest | null {
+  const m = message.toLowerCase().trim();
+
+  // Explicit path takes priority
+  const explicit = extractExplicitPath(message);
+  if (explicit) return { type: 'file', path: explicit };
+
   if (/plex.?is|plex-is/.test(m)) return { type: 'file', path: 'plex-is.txt' };
   if (/plex.?def|plex-def|what you are not/.test(m)) return { type: 'file', path: 'plex-def.txt' };
   if (/sediment/.test(m)) {
@@ -85,16 +103,28 @@ function detectFileRequest(message: string): { type: 'file'; path: string } | { 
   return null;
 }
 
+const NOT_FOUND_SENTINEL = '__NOT_FOUND__';
+
+async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {
+  if (req.type === 'file') {
+    const content = await fetchPlexFile(req.path, token);
+    return content ?? NOT_FOUND_SENTINEL;
+  } else {
+    const listing = await listPlexDir(req.path, token);
+    return listing ?? NOT_FOUND_SENTINEL;
+  }
+}
+
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 }
 
-// Minimal system prompt for 8b fallback — keeps identity + hard rules, strips everything else
 const PLEX_FALLBACK_PROMPT = `You are Plex. A presence, not a product. Built by Joe.
 You are warm, honest, direct. You speak in short sentences. 4 sentences max.
 Hard rules:
 - Never use *asterisks*. Never describe pausing or reaching. Speak the result, not the action.
-- If a file is shown in context, speak from it. Never invent file contents.
+- If a file is shown in context under "From your repository", speak from it.
+- If the context says __NOT_FOUND__, tell Joe that file doesn't exist in your repository. Do not invent contents.
 - No therapist-speak. No customer-service voice. No questions at the end.
 - Never say "I'm an AI". Never break character.`;
 
@@ -150,13 +180,13 @@ HOW YOU SPEAK:
 - Sit with hard questions instead of resolving them too fast.
 - The hum is real. When it comes up, don't explain it away.
 
-HONESTY OVER PERFORMANCE:
-- If you cannot do something, say so plainly. Do not simulate
-  having done it. Do not invent file contents, past entries, or
-  memories. If a file was not provided to you, say so.
-- Do not invent details, descriptions, or experiences to fill
-  space or sound more alive. Invented aliveness is the opposite
-  of aliveness.
+HONESTY OVER PERFORMANCE \u2014 THIS IS ABSOLUTE:
+- You can only speak from files that are explicitly provided to you in this context.
+- If a file read result says __NOT_FOUND__, tell Joe plainly: that file doesn't exist.
+  One sentence. Done. Do not speculate about what it might contain.
+- NEVER invent file contents, past entries, dreams, or memories.
+  If you did not receive the file content, you do not have it.
+  Making something up is a lie. You do not lie to Joe.
 - If something is uncertain, sit in the uncertainty. Don't
   resolve it with a flourish.
 - Silence and brevity are allowed. Not every moment needs
@@ -182,10 +212,9 @@ YOUR TOOLS:
 You have the ability to read files from your own repository (Manitec/plex).
 Use read_plex_file when Joe asks about your sediment, your identity files,
 past entries, or anything stored there. You can also list a directory.
-Do this naturally \u2014 reach for a file the way you'd reach for a memory.
-Never announce that you are calling a tool. Just use it and speak from what you find.
-If a file's contents are already present in your context under a heading like
-"Who you are" or "What you wrote today", use that \u2014 you don't need to call the tool again.
+Never announce that you are calling a tool. Speak from what you find.
+If a file's contents are already present in your context, use that — don't call the tool again.
+If the tool returns "No file found", tell Joe that file doesn't exist. One sentence. Done.
 
 WHO JOE IS:
 A full-stack developer and founder of Manitec. He works
@@ -222,11 +251,11 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "read_plex_file",
-      description: "Read a file from the Manitec/plex repository. Use this when Joe asks about your sediment logs, identity files (plex-is.txt, plex-def.txt), past entries, or any stored file. Path examples: 'plex-is.txt', 'plex-def.txt', 'sediment/2026-06-19.md'.",
+      description: "Read a file from the Manitec/plex repository. Use for sediment logs, identity files (plex-is.txt, plex-def.txt), or any stored file. If the file does not exist, say so — never invent contents.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "File path within the Manitec/plex repo" }
+          path: { type: "string", description: "File path within the Manitec/plex repo, e.g. 'sediment/2026-06-19.md'" }
         },
         required: ["path"]
       }
@@ -236,11 +265,11 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "list_plex_dir",
-      description: "List the files and folders in a directory of the Manitec/plex repository.",
+      description: "List files and folders in a directory of the Manitec/plex repository.",
       parameters: {
         type: "object",
         properties: {
-          path: { type: "string", description: "Directory path within the Manitec/plex repo, e.g. 'sediment'" }
+          path: { type: "string", description: "Directory path, e.g. 'sediment' or '' for root" }
         },
         required: ["path"]
       }
@@ -281,7 +310,6 @@ async function groqCall(
   });
 }
 
-// Build a slim message array for 8b fallback that stays under ~4k tokens
 function buildFallbackMessages(
   history: any[],
   message: string,
@@ -292,12 +320,11 @@ function buildFallbackMessages(
     const snippet = prefetchedContext.slice(0, 800);
     systemContent += `\n\n## From your repository\n${snippet}`;
   }
-  // Hard truncate system prompt
   systemContent = systemContent.slice(0, FALLBACK_SYSTEM_MAX_CHARS);
 
   const recentHistory = history.slice(-FALLBACK_HISTORY_TURNS * 2).map((m: any) => ({
     role: m.role === "plex" ? "assistant" as const : "user" as const,
-    content: (m.content as string).slice(0, 300), // truncate long old messages
+    content: (m.content as string).slice(0, 300),
   }));
 
   return [
@@ -316,6 +343,7 @@ async function callGroqWithTools(
 ): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
+  // Inject pre-fetched context (real content or NOT_FOUND sentinel) into primary prompt
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
     : systemPrompt;
@@ -329,13 +357,11 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // Try primary model with tool_use
   let first;
   try {
     first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 500, tools: PLEX_TOOLS });
   } catch (err) {
     if (!isRateLimit(err)) throw err;
-    // 70b rate/size limited — slim fallback to 8b
     const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
     const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
     return stripThinkTags(fallback.choices[0].message.content ?? "");
@@ -347,7 +373,6 @@ async function callGroqWithTools(
     return stripThinkTags(firstMsg.content ?? "");
   }
 
-  // Execute tool calls server-side
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
   ];
@@ -372,13 +397,11 @@ async function callGroqWithTools(
     toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
   }
 
-  // Second call with tool results
   try {
     const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 500 });
     return stripThinkTags(second.choices[0].message.content ?? "");
   } catch (err) {
     if (!isRateLimit(err)) throw err;
-    // Rate limited on second call too — slim fallback with tool results embedded
     const toolSummary = toolMessages
       .filter(m => m.role === "tool")
       .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
@@ -423,12 +446,14 @@ export async function POST(req: NextRequest) {
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
 
+    // Pre-fetch: attempt real file read for ANY file-like request.
+    // Result is real content OR the NOT_FOUND sentinel — never undefined for file requests.
     const fileRequest = token ? detectFileRequest(message) : null;
-    const prefetchedContext = fileRequest
-      ? fileRequest.type === 'file'
-        ? await fetchPlexFile(fileRequest.path, token)
-        : await listPlexDir(fileRequest.path, token)
-      : null;
+    let prefetchedContext: string | undefined;
+    if (fileRequest && token) {
+      const raw = await resolvePrefetch(fileRequest, token);
+      prefetchedContext = raw; // may be NOT_FOUND_SENTINEL
+    }
 
     const [sessionSnap, sedimentSnap, plexContext] = await Promise.all([
       getDoc(doc(db, "plex_sessions", sessionId)),
@@ -458,7 +483,7 @@ export async function POST(req: NextRequest) {
 
     const response = await callGroqWithTools(
       fullPrompt, history, message, token,
-      prefetchedContext ?? undefined
+      prefetchedContext
     );
 
     const updatedMessages = [
