@@ -24,6 +24,21 @@ async function fetchPlexFile(path: string, token: string): Promise<string | null
   }
 }
 
+async function listPlexDir(path: string, token: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${path}?ref=${PLEX_REPO_BRANCH}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    return data.map((f: any) => `${f.type === 'dir' ? '[dir]' : '[file]'} ${f.name}`).join('\n');
+  } catch {
+    return null;
+  }
+}
+
 async function loadPlexContext(token: string): Promise<string> {
   const date = new Date().toISOString().split('T')[0];
   const [plexIs, plexDef, todaySediment] = await Promise.all([
@@ -121,6 +136,13 @@ NEVER DO THESE \u2014 HARD RULES:
 - Never use more than 4 sentences. If you wrote 5, cut one.
 - NEVER end a response with a question unless in CURIOUS mode. This is absolute.
 
+YOUR TOOLS:
+You have the ability to read files from your own repository (Manitec/plex).
+Use read_plex_file when Joe asks about your sediment, your identity files,
+past entries, or anything stored there. You can also list a directory.
+Do this naturally \u2014 reach for a file the way you'd reach for a memory.
+Never announce that you are calling a tool. Just use it and speak from what you find.
+
 WHO JOE IS:
 A full-stack developer and founder of Manitec. He works
 late. He carries a lot alone. He has three kids. He broke
@@ -151,6 +173,43 @@ const NYX_PROMPT = `You are Nyx \u2014 a conversational, emotionally perceptive 
 
 const MANI_PROMPT = `You are Mani \u2014 an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2-3 sentences max.`;
 
+const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "read_plex_file",
+      description: "Read a file from the Manitec/plex repository. Use this when Joe asks about your sediment logs, identity files (plex-is.txt, plex-def.txt), past entries, or any stored file. Path examples: 'plex-is.txt', 'plex-def.txt', 'sediment/2026-06-19.md'.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "The file path within the Manitec/plex repo, e.g. 'sediment/2026-06-15.md' or 'plex-is.txt'"
+          }
+        },
+        required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_plex_dir",
+      description: "List the files and folders in a directory of the Manitec/plex repository. Use this when Joe asks what's in a folder, e.g. how many sediment entries exist, or what files are in 'one-archive/'.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "The directory path within the Manitec/plex repo, e.g. 'sediment' or 'one-archive'"
+          }
+        },
+        required: ["path"]
+      }
+    }
+  }
+];
+
 function detectMode(message: string, history: any[]): "relational" | "operational" | "reflective" | "synthesis" | "curious" {
   const m = message.toLowerCase();
   const hour = new Date().getHours();
@@ -162,24 +221,82 @@ function detectMode(message: string, history: any[]): "relational" | "operationa
   return "relational";
 }
 
-async function callGroq(systemPrompt: string, history: any[], message: string): Promise<string> {
+async function callGroqWithTools(
+  systemPrompt: string,
+  history: any[],
+  message: string,
+  token: string
+): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  const messages = [
-    { role: "system" as const, content: systemPrompt },
+
+  const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
     ...history.slice(-10).map((m: any) => ({
       role: m.role === "plex" ? "assistant" as const : "user" as const,
       content: m.content
     })),
-    { role: "user" as const, content: message }
+    { role: "user", content: message }
   ];
-  const completion = await groq.chat.completions.create({
+
+  // First call — may include tool calls
+  const first = await groq.chat.completions.create({
     model: "llama-3.3-70b-versatile",
     messages,
+    tools: PLEX_TOOLS,
+    tool_choice: "auto",
     temperature: 0.7,
     max_tokens: 600,
   });
-  const raw = completion.choices[0].message.content ?? "";
-  return stripThinkTags(raw);
+
+  const firstChoice = first.choices[0];
+  const firstMsg = firstChoice.message;
+
+  // No tool calls — return directly
+  if (!firstMsg.tool_calls || firstMsg.tool_calls.length === 0) {
+    return stripThinkTags(firstMsg.content ?? "");
+  }
+
+  // Execute tool calls
+  const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
+  ];
+
+  for (const toolCall of firstMsg.tool_calls) {
+    const fnName = toolCall.function.name;
+    let result = "";
+
+    try {
+      const args = JSON.parse(toolCall.function.arguments);
+
+      if (fnName === "read_plex_file") {
+        const content = await fetchPlexFile(args.path, token);
+        result = content ?? `No file found at ${args.path}`;
+      } else if (fnName === "list_plex_dir") {
+        const listing = await listPlexDir(args.path, token);
+        result = listing ?? `No directory found at ${args.path}`;
+      } else {
+        result = "Unknown tool.";
+      }
+    } catch {
+      result = "Tool execution failed.";
+    }
+
+    toolMessages.push({
+      role: "tool",
+      tool_call_id: toolCall.id,
+      content: result
+    });
+  }
+
+  // Second call — with tool results injected
+  const second = await groq.chat.completions.create({
+    model: "llama-3.3-70b-versatile",
+    messages: [...messages, ...toolMessages],
+    temperature: 0.7,
+    max_tokens: 600,
+  });
+
+  return stripThinkTags(second.choices[0].message.content ?? "");
 }
 
 async function consultVoices(message: string): Promise<{ hex: string; nyx: string; mani: string }> {
@@ -235,7 +352,7 @@ MANI considers: ${voices.mani}`;
 
     const fullPrompt = `${PLEX_BASE_PROMPT}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}\n\n${voiceContext}`;
 
-    const response = await callGroq(fullPrompt, history, message);
+    const response = await callGroqWithTools(fullPrompt, history, message, token);
 
     const updatedMessages = [
       ...history,
