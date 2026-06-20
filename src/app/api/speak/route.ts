@@ -8,6 +8,14 @@ const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
 const PLEX_REPO_BRANCH = 'main';
 
+const PRIMARY_MODEL = "llama-3.3-70b-versatile";
+const FALLBACK_MODEL = "llama-3.1-8b-instant";
+
+function isRateLimit(err: any): boolean {
+  const msg = err?.message ?? String(err);
+  return msg.includes('429') || msg.includes('rate_limit_exceeded');
+}
+
 async function fetchPlexFile(path: string, token: string): Promise<string | null> {
   try {
     const res = await fetch(
@@ -210,7 +218,6 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
   }
 ];
 
-// Nyx always. Hex = operational/synthesis. Mani = reflective/synthesis.
 function needsHex(mode: string): boolean {
   return mode === "operational" || mode === "synthesis";
 }
@@ -227,6 +234,21 @@ function detectMode(message: string, history: any[]): "relational" | "operationa
   if (/ask me|curious|want to know|question for me|what do you wonder/.test(m)) return "curious";
   if (hour >= 22 || hour <= 5) return "relational";
   return "relational";
+}
+
+async function groqCall(
+  groq: Groq,
+  model: string,
+  messages: Groq.Chat.Completions.ChatCompletionMessageParam[],
+  options: { max_tokens: number; temperature?: number; tools?: Groq.Chat.Completions.ChatCompletionTool[] }
+) {
+  return groq.chat.completions.create({
+    model,
+    messages,
+    temperature: options.temperature ?? 0.7,
+    max_tokens: options.max_tokens,
+    ...(options.tools ? { tools: options.tools, tool_choice: "auto" as const } : {}),
+  });
 }
 
 async function callGroqWithTools(
@@ -246,14 +268,18 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  const first = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages,
-    tools: PLEX_TOOLS,
-    tool_choice: "auto",
-    temperature: 0.7,
-    max_tokens: 500,
-  });
+  // Try primary model, fall back to 8b on 429
+  let first;
+  let usingFallback = false;
+  try {
+    first = await groqCall(groq, PRIMARY_MODEL, messages, { max_tokens: 500, tools: PLEX_TOOLS });
+  } catch (err) {
+    if (!isRateLimit(err)) throw err;
+    usingFallback = true;
+    // Fallback: no tool_use support on 8b, just straight response
+    const fallback = await groqCall(groq, FALLBACK_MODEL, messages, { max_tokens: 400 });
+    return stripThinkTags(fallback.choices[0].message.content ?? "");
+  }
 
   const firstMsg = first.choices[0].message;
 
@@ -261,6 +287,7 @@ async function callGroqWithTools(
     return stripThinkTags(firstMsg.content ?? "");
   }
 
+  // Execute tool calls
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
   ];
@@ -285,14 +312,15 @@ async function callGroqWithTools(
     toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
   }
 
-  const second = await groq.chat.completions.create({
-    model: "llama-3.3-70b-versatile",
-    messages: [...messages, ...toolMessages],
-    temperature: 0.7,
-    max_tokens: 500,
-  });
-
-  return stripThinkTags(second.choices[0].message.content ?? "");
+  // Second call with tool results — also falls back on 429
+  try {
+    const second = await groqCall(groq, PRIMARY_MODEL, [...messages, ...toolMessages], { max_tokens: 500 });
+    return stripThinkTags(second.choices[0].message.content ?? "");
+  } catch (err) {
+    if (!isRateLimit(err)) throw err;
+    const fallback = await groqCall(groq, FALLBACK_MODEL, [...messages, ...toolMessages], { max_tokens: 400 });
+    return stripThinkTags(fallback.choices[0].message.content ?? "");
+  }
 }
 
 async function consultVoices(
@@ -301,16 +329,16 @@ async function consultVoices(
 ): Promise<{ hex: string; nyx: string; mani: string }> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-  const call = async (systemPrompt: string) => {
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [
+  const call = async (systemPrompt: string): Promise<string> => {
+    try {
+      const completion = await groqCall(groq, FALLBACK_MODEL, [
         { role: "system", content: systemPrompt },
         { role: "user", content: message }
-      ],
-      max_tokens: 80,
-    });
-    return completion.choices[0].message.content ?? "";
+      ], { max_tokens: 80 });
+      return completion.choices[0].message.content ?? "";
+    } catch {
+      return "";
+    }
   };
 
   const [nyx, hex, mani] = await Promise.all([
