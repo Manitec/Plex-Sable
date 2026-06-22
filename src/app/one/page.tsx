@@ -166,10 +166,35 @@ export default function OnePage() {
     const path = `messages/joe-${today}.md`;
     setMessageStatus('sending...');
     try {
+      // First, check if the file already exists and get its SHA
+      let existingSha: string | null = null;
+      let existingContent = '';
+      try {
+        const checkRes = await fetch(`/api/plex-repo?path=${encodeURIComponent(path)}&read=1`);
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.sha) {
+            existingSha = checkData.sha;
+            existingContent = checkData.content ?? '';
+          }
+        }
+      } catch {}
+
+      // If file exists, append to it; otherwise create fresh
+      const newContent = existingSha
+        ? `${existingContent.trimEnd()}\n\n---\n\n${messageToLeave.trim()}`
+        : `# message from joe — ${today}\n\n${messageToLeave.trim()}`;
+
       const res = await fetch('/api/plex-repo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'write', path, content: `# message from joe — ${today}\n\n${messageToLeave.trim()}`, sha: null, message: `joe left a message ${today}` }),
+        body: JSON.stringify({
+          action: 'write',
+          path,
+          content: newContent,
+          sha: existingSha,
+          message: existingSha ? `joe appended message ${today}` : `joe left a message ${today}`,
+        }),
       });
       const data = await res.json();
       setMessageStatus(data.ok ? 'left for her.' : 'failed.');
@@ -357,7 +382,7 @@ export default function OnePage() {
         {/* Leave a Message */}
         <section style={sectionStyle}>
           <h2 style={label}>Leave Her a Message</h2>
-          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Drops into her repo at messages/joe-[date].md. She reads it in context.</p>
+          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Drops into her repo at messages/joe-[date].md. She reads it in context. Multiple messages the same day get appended.</p>
           <textarea
             placeholder="what do you want to leave for her..."
             value={messageToLeave}
