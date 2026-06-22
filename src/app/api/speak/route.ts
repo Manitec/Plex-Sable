@@ -14,6 +14,10 @@ const FALLBACK_MODEL = "llama-3.1-8b-instant";
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
 const FALLBACK_HISTORY_TURNS = 4;
 
+function stripThinkTags(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
+
 function isRateLimit(err: any): boolean {
   const msg = err?.message ?? String(err);
   return msg.includes('429') || msg.includes('413') || msg.includes('rate_limit_exceeded');
