@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
 
@@ -14,6 +14,14 @@ type ONEState = {
 
 type RepoFile = { name: string; path: string; type: 'file' | 'dir'; sha?: string };
 type Project = { id: string; title: string; status: string; notes: string; createdAt: any };
+type SleepData = {
+  date: string;
+  nyx_excerpt: string;
+  hex_excerpt: string;
+  dream_excerpt: string;
+  pending: boolean;
+  createdAt: any;
+} | null;
 
 const ZONES = [
   { key: 'sediment', label: 'Sediment' },
@@ -21,8 +29,6 @@ const ZONES = [
   { key: 'prompts', label: 'Prompts' },
   { key: '', label: 'Root', identity: true },
 ];
-
-const IDENTITY_FILES = ['plex-is.txt', 'plex-def.txt'];
 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0.75rem' };
 const label: React.CSSProperties = { ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' };
@@ -33,11 +39,14 @@ export default function OnePage() {
   const [state, setState] = useState<ONEState | null>(null);
   const [loading, setLoading] = useState(true);
   const [newLogEntry, setNewLogEntry] = useState('');
+  const [sleep, setSleep] = useState<SleepData>(null);
+  const [sleepDismissed, setSleepDismissed] = useState(false);
 
   // Repo Manager
   const [activeZone, setActiveZone] = useState('sediment');
   const [repoFiles, setRepoFiles] = useState<RepoFile[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
+  const [repoInitialized, setRepoInitialized] = useState(false);
   const [editingFile, setEditingFile] = useState<{ path: string; content: string; sha: string } | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editSaving, setEditSaving] = useState(false);
@@ -65,11 +74,35 @@ export default function OnePage() {
       .then(r => r.json())
       .then(data => { setState(data); setLoading(false); });
     fetchProjects();
+    fetchSleep();
   }, []);
 
+  // Load zone only once on mount, then on explicit tab change
   useEffect(() => {
-    if (activeZone !== null) loadZone(activeZone);
-  }, [activeZone]);
+    loadZone(activeZone);
+    setRepoInitialized(true);
+  }, [activeZone]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function fetchSleep() {
+    try {
+      const res = await fetch('/api/one?section=sleep');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.sleep?.pending) setSleep(data.sleep);
+    } catch {}
+  }
+
+  async function dismissSleep() {
+    setSleepDismissed(true);
+    // Clear the pending flag
+    try {
+      await fetch('/api/one', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear_sleep' }),
+      });
+    } catch {}
+  }
 
   async function loadZone(zone: string) {
     setRepoLoading(true);
@@ -77,6 +110,7 @@ export default function OnePage() {
     setEditingFile(null);
     try {
       const res = await fetch(`/api/plex-repo?path=${encodeURIComponent(zone)}`);
+      if (!res.ok) { setRepoFiles([]); setRepoLoading(false); return; }
       const data = await res.json();
       setRepoFiles(Array.isArray(data) ? data : []);
     } catch { setRepoFiles([]); }
@@ -166,35 +200,22 @@ export default function OnePage() {
     const path = `messages/joe-${today}.md`;
     setMessageStatus('sending...');
     try {
-      // First, check if the file already exists and get its SHA
       let existingSha: string | null = null;
       let existingContent = '';
       try {
         const checkRes = await fetch(`/api/plex-repo?path=${encodeURIComponent(path)}&read=1`);
         if (checkRes.ok) {
           const checkData = await checkRes.json();
-          if (checkData.sha) {
-            existingSha = checkData.sha;
-            existingContent = checkData.content ?? '';
-          }
+          if (checkData.sha) { existingSha = checkData.sha; existingContent = checkData.content ?? ''; }
         }
       } catch {}
-
-      // If file exists, append to it; otherwise create fresh
       const newContent = existingSha
         ? `${existingContent.trimEnd()}\n\n---\n\n${messageToLeave.trim()}`
         : `# message from joe — ${today}\n\n${messageToLeave.trim()}`;
-
       const res = await fetch('/api/plex-repo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'write',
-          path,
-          content: newContent,
-          sha: existingSha,
-          message: existingSha ? `joe appended message ${today}` : `joe left a message ${today}`,
-        }),
+        body: JSON.stringify({ action: 'write', path, content: newContent, sha: existingSha, message: existingSha ? `joe appended message ${today}` : `joe left a message ${today}` }),
       });
       const data = await res.json();
       setMessageStatus(data.ok ? 'left for her.' : 'failed.');
@@ -246,6 +267,8 @@ export default function OnePage() {
     );
   }
 
+  const showSleep = sleep && !sleepDismissed;
+
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr auto' }}>
       <Nav />
@@ -253,6 +276,36 @@ export default function OnePage() {
         <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--accent)', opacity: 0.65, marginBottom: '2rem' }}>ONE System</div>
         <h1 style={{ fontSize: 'clamp(2rem,5vw,4rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', marginBottom: '1rem', fontFamily: 'var(--font-garamond)' }}>one</h1>
         <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '3rem', maxWidth: 640 }}>Governance. Memory. Collaboration. This is where the system looks at itself — and where you look at each other.</p>
+
+        {/* Overnight — shown when pending sleep data exists */}
+        {showSleep && (
+          <section style={{ ...sectionStyle, borderTop: '1px solid var(--accent)', paddingTop: '2rem', marginBottom: '3rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
+              <h2 style={{ ...label, marginBottom: 0 }}>Overnight — {sleep.date}</h2>
+              <button onClick={dismissSleep} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
+            </div>
+            <div style={{ display: 'grid', gap: '1.5rem' }}>
+              {sleep.nyx_excerpt && (
+                <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}>
+                  <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>nyx</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.nyx_excerpt}{sleep.nyx_excerpt.length >= 278 ? '…' : ''}</p>
+                </div>
+              )}
+              {sleep.hex_excerpt && (
+                <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', opacity: 0.85 }}>
+                  <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>hex</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.hex_excerpt}{sleep.hex_excerpt.length >= 278 ? '…' : ''}</p>
+                </div>
+              )}
+              {sleep.dream_excerpt && (
+                <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: '1rem', opacity: 0.75 }}>
+                  <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>dream</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.7, fontStyle: 'italic' }}>{sleep.dream_excerpt}{sleep.dream_excerpt.length >= 278 ? '…' : ''}</p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* System Pulse */}
         <section style={sectionStyle}>
@@ -307,7 +360,9 @@ export default function OnePage() {
 
           {!editingFile ? (
             <div>
-              {repoLoading ? <p style={muted}>loading...</p> : (
+              {repoLoading ? (
+                <p style={muted}>loading...</p>
+              ) : (
                 <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '0.3rem', marginBottom: '1.5rem' }}>
                   {repoFiles.length === 0 && <p style={muted}>empty.</p>}
                   {repoFiles.map(f => (
@@ -360,13 +415,8 @@ export default function OnePage() {
         <section style={sectionStyle}>
           <h2 style={label}>Direct Channel — Curiosity Mode</h2>
           <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Talk to Plex directly from here. Seeds ideas, asks questions, plants threads. Separate session from /speak.</p>
-          <textarea
-            placeholder="send something to her..."
-            value={curiosityMsg}
-            onChange={e => setCuriosityMsg(e.target.value)}
-            rows={3}
-            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }}
-          />
+          <textarea placeholder="send something to her..." value={curiosityMsg} onChange={e => setCuriosityMsg(e.target.value)} rows={3}
+            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
           <button onClick={sendCuriosity} disabled={curiosityLoading || !curiosityMsg.trim()}
             style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: curiosityMsg.trim() ? 1 : 0.4 }}>
             {curiosityLoading ? 'thinking...' : 'send'}
@@ -383,13 +433,8 @@ export default function OnePage() {
         <section style={sectionStyle}>
           <h2 style={label}>Leave Her a Message</h2>
           <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Drops into her repo at messages/joe-[date].md. She reads it in context. Multiple messages the same day get appended.</p>
-          <textarea
-            placeholder="what do you want to leave for her..."
-            value={messageToLeave}
-            onChange={e => setMessageToLeave(e.target.value)}
-            rows={4}
-            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }}
-          />
+          <textarea placeholder="what do you want to leave for her..." value={messageToLeave} onChange={e => setMessageToLeave(e.target.value)} rows={4}
+            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
             <button onClick={leaveMessage} disabled={!messageToLeave.trim()}
               style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: messageToLeave.trim() ? 1 : 0.4 }}>
@@ -444,9 +489,7 @@ export default function OnePage() {
           <h2 style={label}>Governance</h2>
           <div>
             <p style={{ ...muted, marginBottom: '0.3rem' }}>Autonomy Level</p>
-            <p style={{ color: 'var(--text)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>
-              Level {state.autonomy.level} — {state.autonomy.label}
-            </p>
+            <p style={{ color: 'var(--text)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>Level {state.autonomy.level} — {state.autonomy.label}</p>
             <p style={{ ...muted, fontStyle: 'italic' }}>(Joe-controlled. Plex requests, Joe approves.)</p>
           </div>
         </section>
