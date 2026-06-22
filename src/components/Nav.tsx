@@ -3,12 +3,13 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const links = [
-  { href: '/',         label: 'presence' },
-  { href: '/mind',     label: 'mind' },
-  { href: '/speak',    label: 'speak' },
-  { href: '/see',      label: 'see' },
-  { href: '/one',      label: 'one' },
-  { href: '/tell',     label: 'tell' },
+  { href: '/',        label: 'presence' },
+  { href: '/mind',    label: 'mind' },
+  { href: '/speak',   label: 'speak' },
+  { href: '/see',     label: 'see' },
+  { href: '/one',     label: 'one' },
+  { href: '/tell',    label: 'tell' },
+  { href: '/manage',  label: 'manage' },
 ];
 
 export default function Nav() {
