@@ -239,7 +239,8 @@ async function callGroqWithTools(
   history: any[],
   message: string,
   token: string,
-  prefetchedContext?: string
+  prefetchedContext?: string,
+  isExplicitFileRequest?: boolean
 ): Promise<{ text: string; fallback: boolean }> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -256,9 +257,9 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // If context was prefetched, skip tools — content is already in the prompt.
-  // This avoids Groq tool_use_failed errors on directory/file requests.
-  const useTools = !prefetchedContext;
+  // Only pass tools when the message is an explicit file/dir request AND no prefetch has already resolved it.
+  // Never pass tools for relational, curious, or general conversation — llama-3.3 will hallucinate XML-style calls.
+  const useTools = isExplicitFileRequest === true && !prefetchedContext;
 
   let first;
   try {
@@ -382,7 +383,14 @@ export async function POST(req: NextRequest) {
 
     const fullPrompt = `${basePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;
 
-    const { text: response, fallback } = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext);
+    const { text: response, fallback } = await callGroqWithTools(
+      fullPrompt,
+      history,
+      message,
+      token,
+      prefetchedContext,
+      fileRequest !== null  // only true when message is an explicit file/dir request
+    );
 
     const updatedMessages = [
       ...history,
