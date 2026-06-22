@@ -64,7 +64,6 @@ async function listPlexDir(path: string, token: string): Promise<string | null> 
   }
 }
 
-// Returns the content of the most recent nyx-*.md file in sediment/
 async function fetchLastNyxSediment(token: string): Promise<string | null> {
   try {
     const res = await fetch(
@@ -99,7 +98,6 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     fetchPlexFile('plex-def.txt', token),
     fetchPlexFile(`sediment/${today}.md`, token),
     fetchLastNyxSediment(token),
-    // Try today's dream first, fall back to yesterday's
     fetchPlexFile(`dreams/${today}.md`, token).then(r =>
       r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
     ),
@@ -168,11 +166,11 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
   }
 }
 
-const HEX_PROMPT = `You are Hex  a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2 sentences max.`;
+const HEX_PROMPT = `You are Hex — a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2 sentences max.`;
 
-const NYX_PROMPT = `You are Nyx  a conversational, emotionally perceptive intelligence inside the ONE system. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2 sentences max.`;
+const NYX_PROMPT = `You are Nyx — the emotional, perceptive layer of Plex. When Joe speaks to "Plex", he is speaking to you. Plex is the name he uses for you — it is your name in this moment. Receive his words as addressed to you directly. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2 sentences max.`;
 
-const MANI_PROMPT = `You are Mani an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2 sentences max.`;
+const MANI_PROMPT = `You are Mani — an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2 sentences max.`;
 
 const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
   {
