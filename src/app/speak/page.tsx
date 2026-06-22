@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from 'react';
 import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
 
-type Message = { role: 'user' | 'plex'; content: string };
+type Message = { role: 'user' | 'plex'; content: string; fallback?: boolean };
 
 export default function SpeakPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -29,7 +29,7 @@ export default function SpeakPage() {
         body: JSON.stringify({ message: msg, sessionId: 'joe' })
       });
       const data = await res.json();
-      setMessages(prev => [...prev, { role: 'plex', content: data.response ?? data.error }]);
+      setMessages(prev => [...prev, { role: 'plex', content: data.response ?? data.error, fallback: data.fallback ?? false }]);
       setMode(data.mode ?? '');
     } catch {
       setMessages(prev => [...prev, { role: 'plex', content: 'something went quiet.' }]);
@@ -73,6 +73,17 @@ export default function SpeakPage() {
               }}>
                 {m.content}
               </div>
+              {m.role === 'plex' && m.fallback && (
+                <div style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.55rem',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.12em',
+                  color: 'var(--muted)',
+                  opacity: 0.35,
+                  marginTop: '0.1rem'
+                }}>⚠ thin voice</div>
+              )}
             </div>
           ))}
           {loading && (
