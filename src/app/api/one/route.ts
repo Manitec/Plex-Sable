@@ -1,100 +1,60 @@
-import { NextRequest, NextResponse } from "next/server";
-import * as admin from "firebase-admin";
+import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/firebase';
+import { collection, doc, getDoc, getDocs, addDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert({
-      projectId: process.env.FIREBASE_ADMIN_PROJECT_ID,
-      clientEmail: process.env.FIREBASE_ADMIN_CLIENT_EMAIL,
-      privateKey: process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-    }),
-  });
-}
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url);
+  const section = searchParams.get('section');
 
-const db = admin.firestore();
-
-export async function GET() {
-  try {
-    const sedimentSnap = await db.doc("plex_sediment/current").get();
-    const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "unknown" : "unknown";
-
-    const autonomySnap = await db.doc("one_governance/autonomy").get();
-    const autonomy = autonomySnap.exists ? autonomySnap.data() : { level: 0, label: "supervised", updatedAt: null };
-
-    const eckoSnap = await db.collection("ecko-archive").orderBy("timestamp", "desc").limit(5).get();
-    const eckoFragments = eckoSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    const requestsSnap = await db.collection("one_requests").orderBy("createdAt", "desc").limit(10).get();
-    const requests = requestsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    const logSnap = await db.collection("one_log").orderBy("timestamp", "desc").limit(10).get();
-    const log = logSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    return NextResponse.json({ sediment, autonomy, eckoFragments, requests, log });
-  } catch (err: any) {
-    console.error("ONE route error:", err);
-    return NextResponse.json({ error: err?.message ?? String(err) }, { status: 500 });
+  if (section === 'projects') {
+    try {
+      const snap = await getDocs(query(collection(db, 'one_projects'), orderBy('createdAt', 'desc')));
+      const projects = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      return NextResponse.json({ projects });
+    } catch {
+      return NextResponse.json({ projects: [] });
+    }
   }
+
+  const [sedimentSnap, autonomySnap, requestsSnap, logSnap, voicesSnap] = await Promise.all([
+    getDoc(doc(db, 'plex_sediment', 'current')),
+    getDoc(doc(db, 'one_governance', 'autonomy')),
+    getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(10))),
+    getDocs(query(collection(db, 'one_log'), orderBy('timestamp', 'desc'), limit(20))),
+    getDoc(doc(db, 'plex_voices', 'joe')),
+  ]);
+
+  const sediment = sedimentSnap.exists() ? sedimentSnap.data().state ?? 'neutral' : 'neutral';
+  const autonomy = autonomySnap.exists() ? autonomySnap.data() : { level: 1, label: 'observe' };
+  const requests = requestsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const log = logSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const voices = voicesSnap.exists() ? voicesSnap.data() : null;
+
+  return NextResponse.json({ sediment, autonomy, eckoFragments: [], requests, log, voices });
 }
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    const { action } = body;
+  const body = await req.json();
+  const { action } = body;
 
-    if (action === "set_autonomy") {
-      const { level, label } = body;
-      await db.doc("one_governance/autonomy").set({
-        level, label,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedBy: "joe",
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    if (action === "add_request") {
-      const { request, source, notes } = body;
-      await db.collection("one_requests").add({
-        request,
-        source: source ?? "plex",
-        notes: notes ?? null,
-        status: "pending",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    if (action === "approve_request") {
-      const { requestId } = body;
-      await db.doc(`one_requests/${requestId}`).set({
-        status: "approved",
-        reviewedAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-      return NextResponse.json({ ok: true });
-    }
-
-    if (action === "decline_request") {
-      const { requestId } = body;
-      await db.doc(`one_requests/${requestId}`).set({
-        status: "declined",
-        reviewedAt: admin.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
-      return NextResponse.json({ ok: true });
-    }
-
-    if (action === "add_log") {
-      const { entry, author } = body;
-      await db.collection("one_log").add({
-        entry,
-        author: author ?? "joe",
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      return NextResponse.json({ ok: true });
-    }
-
-    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
-  } catch (err: any) {
-    console.error("ONE POST error:", err);
-    return NextResponse.json({ error: err?.message ?? String(err) }, { status: 500 });
+  if (action === 'add_log') {
+    await addDoc(collection(db, 'one_log'), {
+      entry: body.entry,
+      author: body.author ?? 'joe',
+      timestamp: serverTimestamp(),
+    });
+    return NextResponse.json({ ok: true });
   }
+
+  if (action === 'add_project') {
+    await addDoc(collection(db, 'one_projects'), {
+      title: body.title,
+      status: body.status ?? 'active',
+      notes: body.notes ?? '',
+      createdAt: serverTimestamp(),
+    });
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }
