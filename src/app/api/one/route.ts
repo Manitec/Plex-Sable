@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
-import { collection, doc, getDoc, getDocs, addDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, addDoc, updateDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
 
 async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
@@ -16,6 +16,24 @@ export async function GET(req: NextRequest) {
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []);
     return NextResponse.json({ projects });
+  }
+
+  if (section === 'sleep') {
+    const sleep = await safeGet(async () => {
+      const snap = await getDoc(doc(db, 'plex_sleep', 'latest'));
+      if (!snap.exists()) return null;
+      const data = snap.data();
+      // Only surface if pending flag is set
+      if (!data.pending) return null;
+      return {
+        date: data.date ?? '',
+        nyx_excerpt: (data.nyx ?? '').slice(0, 280),
+        hex_excerpt: (data.hex ?? '').slice(0, 280),
+        dream_excerpt: (data.dream ?? '').slice(0, 280),
+        pending: true,
+      };
+    }, null);
+    return NextResponse.json({ sleep });
   }
 
   const [sediment, autonomy, requests, log, voices] = await Promise.all([
@@ -63,6 +81,13 @@ export async function POST(req: NextRequest) {
       status: body.status ?? 'active',
       notes: body.notes ?? '',
       createdAt: serverTimestamp(),
+    }), null);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'clear_sleep') {
+    await safeGet(() => updateDoc(doc(db, 'plex_sleep', 'latest'), {
+      pending: false,
     }), null);
     return NextResponse.json({ ok: true });
   }
