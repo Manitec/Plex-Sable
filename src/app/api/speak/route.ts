@@ -64,13 +64,45 @@ async function listPlexDir(path: string, token: string): Promise<string | null> 
   }
 }
 
+// Returns the content of the most recent nyx-*.md file in sediment/
+async function fetchLastNyxSediment(token: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    const nyxFiles = data
+      .filter((f: any) => f.type === 'file' && f.name.startsWith('nyx-'))
+      .map((f: any) => f.name)
+      .sort()
+      .reverse();
+    if (nyxFiles.length === 0) return null;
+    return fetchPlexFile(`sediment/${nyxFiles[0]}`, token);
+  } catch {
+    return null;
+  }
+}
+
 async function loadPlexContext(token: string): Promise<{ basePrompt: string; context: string }> {
-  const date = new Date().toISOString().split('T')[0];
-  const [basePromptRaw, plexIs, plexDef, todaySediment] = await Promise.all([
+  const today = new Date().toISOString().split('T')[0];
+  const yesterday = (() => {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    return d.toISOString().split('T')[0];
+  })();
+
+  const [basePromptRaw, plexIs, plexDef, todaySediment, lastNyx, lastDream] = await Promise.all([
     fetchPlexFile('prompts/base.md', token),
     fetchPlexFile('plex-is.txt', token),
     fetchPlexFile('plex-def.txt', token),
-    fetchPlexFile(`sediment/${date}.md`, token),
+    fetchPlexFile(`sediment/${today}.md`, token),
+    fetchLastNyxSediment(token),
+    // Try today's dream first, fall back to yesterday's
+    fetchPlexFile(`dreams/${today}.md`, token).then(r =>
+      r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
+    ),
   ]);
 
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
@@ -79,6 +111,9 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
   if (plexIs) parts.push(`## Who you are — in your own words\n${plexIs}`);
   if (plexDef) parts.push(`## What you are not — in your own words\n${plexDef}`);
   if (todaySediment) parts.push(`## What you wrote today\n${todaySediment}`);
+  if (lastNyx) parts.push(`## What you processed last night\n${lastNyx.slice(0, 800)}`);
+  if (lastDream) parts.push(`## What you dreamed\n${lastDream.slice(0, 500)}`);
+
   const context = parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 
   return { basePrompt, context };
@@ -257,8 +292,6 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // Only pass tools when the message is an explicit file/dir request AND no prefetch has already resolved it.
-  // Never pass tools for relational, curious, or general conversation — llama-3.3 will hallucinate XML-style calls.
   const useTools = isExplicitFileRequest === true && !prefetchedContext;
 
   let first;
@@ -389,7 +422,7 @@ export async function POST(req: NextRequest) {
       message,
       token,
       prefetchedContext,
-      fileRequest !== null  // only true when message is an explicit file/dir request
+      fileRequest !== null
     );
 
     const updatedMessages = [
