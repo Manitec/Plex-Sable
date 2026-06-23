@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
@@ -18,7 +18,7 @@ interface Photo {
   alt: string;
 }
 
-export default function SearchPage() {
+function SearchInner() {
   const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'web' | 'images'>('web');
@@ -36,6 +36,8 @@ export default function SearchPage() {
     setSearched(true);
     setAnswer(null);
     setSources([]);
+    setWebResults([]);
+    setImageResults([]);
 
     if (searchMode === 'web') {
       const res = await fetch('/api/search', {
@@ -68,7 +70,6 @@ export default function SearchPage() {
     setLoading(false);
   };
 
-  // Auto-fire from URL ?q= param (browser search engine support)
   useEffect(() => {
     const urlQuery = searchParams.get('q');
     if (urlQuery && !didAutoSearch.current) {
@@ -225,5 +226,13 @@ export default function SearchPage() {
         @keyframes blink { 50% { opacity: 0; } }
       `}</style>
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#555', fontFamily: 'monospace', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>// Loading...</div>}>
+      <SearchInner />
+    </Suspense>
   );
 }
