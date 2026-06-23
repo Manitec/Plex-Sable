@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 interface WebResult {
@@ -18,6 +19,7 @@ interface Photo {
 }
 
 export default function SearchPage() {
+  const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'web' | 'images'>('web');
   const [webResults, setWebResults] = useState<WebResult[]>([]);
@@ -26,29 +28,29 @@ export default function SearchPage() {
   const [sources, setSources] = useState<{ title: string; url: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const didAutoSearch = useRef(false);
 
-  const handleSearch = async () => {
-    if (!query.trim()) return;
+  const runSearch = async (q: string, searchMode: 'web' | 'images' = 'web') => {
+    if (!q.trim()) return;
     setLoading(true);
     setSearched(true);
     setAnswer(null);
     setSources([]);
 
-    if (mode === 'web') {
+    if (searchMode === 'web') {
       const res = await fetch('/api/search', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query: q })
       });
       const results = await res.json();
       setWebResults(results);
 
-      // fire answer synthesis in parallel
       if (Array.isArray(results) && results.length > 0) {
         const answerRes = await fetch('/api/answer', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query, results })
+          body: JSON.stringify({ query: q, results })
         });
         const answerData = await answerRes.json();
         setAnswer(answerData.answer ?? null);
@@ -58,13 +60,25 @@ export default function SearchPage() {
       const res = await fetch('/api/images', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query })
+        body: JSON.stringify({ query: q })
       });
       setImageResults(await res.json());
     }
 
     setLoading(false);
   };
+
+  // Auto-fire from URL ?q= param (browser search engine support)
+  useEffect(() => {
+    const urlQuery = searchParams.get('q');
+    if (urlQuery && !didAutoSearch.current) {
+      didAutoSearch.current = true;
+      setQuery(urlQuery);
+      runSearch(urlQuery, 'web');
+    }
+  }, [searchParams]);
+
+  const handleSearch = () => runSearch(query, mode);
 
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleSearch();
@@ -143,7 +157,6 @@ export default function SearchPage() {
       <section style={{ maxWidth: '860px', margin: '0 auto', padding: '2rem 1.5rem' }}>
         {loading && <p style={{ color: '#555' }}>// Scanning index...</p>}
 
-        {/* Plex answer synthesis block */}
         {!loading && answer && (
           <div style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: '6px', padding: '1.5rem', marginBottom: '2rem' }}>
             <p style={{ color: '#aaa', fontSize: '0.7rem', marginBottom: '0.75rem', letterSpacing: '0.05em' }}>PLEX // SYNTHESIS</p>
