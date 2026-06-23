@@ -18,6 +18,30 @@ interface Photo {
   alt: string;
 }
 
+const MLogo = () => (
+  <svg
+    width="40"
+    height="40"
+    viewBox="0 0 40 40"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    aria-label="Manitec"
+    style={{ display: 'block', marginBottom: '1rem' }}
+  >
+    {/* Outer square frame */}
+    <rect x="1" y="1" width="38" height="38" rx="4" stroke="#e0e0e0" strokeWidth="1.5" />
+    {/* M mark — two sharp peaks, geometric strokes */}
+    <polyline
+      points="8,30 8,10 20,24 32,10 32,30"
+      stroke="#e0e0e0"
+      strokeWidth="2.5"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+      fill="none"
+    />
+  </svg>
+);
+
 function SearchInner() {
   const searchParams = useSearchParams();
   const [query, setQuery] = useState('');
@@ -110,7 +134,7 @@ function SearchInner() {
     <div style={{ minHeight: '100vh', background: '#0a0a0a', color: '#e0e0e0', fontFamily: 'monospace' }}>
       <header style={{ background: '#111', borderBottom: '1px solid #222', padding: '2rem 0' }}>
         <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 1.5rem' }}>
-          <img src="https://file-hosting.dashnexpages.net/manitec/logo.png" alt="Manitec Logo" style={{ height: '48px', marginBottom: '1rem' }} />
+          <MLogo />
           <h1 style={{ fontSize: '2rem', fontWeight: 700, color: '#fff', margin: '0 0 0.25rem' }}>Plex Search</h1>
           <p style={{ color: '#666', margin: '0 0 1rem', fontSize: '0.875rem' }}>// Initializing search protocol... Access granted.</p>
           <div style={{ fontSize: '0.75rem', color: '#444', display: 'flex', gap: '1rem' }}>
@@ -208,17 +232,6 @@ function SearchInner() {
       </section>
 
       <footer style={{ borderTop: '1px solid #1a1a1a', padding: '2rem 0', textAlign: 'center', color: '#444', fontSize: '0.75rem' }}>
-        <div style={{ marginBottom: '1rem' }}>
-          <a href="https://www.buymeacoffee.com/_Joe" target="_blank" rel="noopener noreferrer">
-            <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style={{ height: '40px' }} />
-          </a>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', marginBottom: '1rem' }}>
-          <a href="https://manitec.pw/home" style={{ color: '#555', textDecoration: 'none' }}>Home</a>
-          <a href="https://manitec.pw/pages/privacy" style={{ color: '#555', textDecoration: 'none' }}>Privacy Policy</a>
-          <a href="https://manitec.pw/pages/terms" style={{ color: '#555', textDecoration: 'none' }}>Terms</a>
-          <a href="https://manitec.pw/pages/about" style={{ color: '#555', textDecoration: 'none' }}>About</a>
-        </div>
         <p>© 2026 Manitec. All Rights Reserved</p>
       </footer>
 
