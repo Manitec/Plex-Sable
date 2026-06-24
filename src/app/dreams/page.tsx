@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
 
@@ -106,6 +107,29 @@ export default function DreamsPage() {
               dangerouslySetInnerHTML={{ __html: renderMarkdown(selected.content) }}
               style={{ fontFamily: 'var(--font-garamond)' }}
             />
+          </div>
+        )}
+
+        {/* Dream nodes link */}
+        {!loading && (
+          <div style={{ marginTop: '4rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border)' }}>
+            <Link href="/dreams/nodes" style={{
+              display: 'inline-flex', alignItems: 'center', gap: '0.6rem',
+              fontFamily: 'var(--font-mono)', fontSize: '0.65rem',
+              textTransform: 'uppercase', letterSpacing: '0.12em',
+              color: 'var(--accent)', opacity: 0.5,
+              textDecoration: 'none',
+              transition: 'opacity 180ms',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+            onMouseLeave={e => (e.currentTarget.style.opacity = '0.5')}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <circle cx="6" cy="6" r="2" fill="currentColor" opacity="0.9"/>
+                <circle cx="6" cy="6" r="5" stroke="currentColor" strokeWidth="0.75" opacity="0.35"/>
+              </svg>
+              emotional field
+            </Link>
           </div>
         )}
 
