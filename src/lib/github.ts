@@ -27,6 +27,10 @@ async function getFile(path: string, token: string): Promise<{ content: string; 
     { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
   );
   if (res.status === 404) return null;
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub GET failed ${res.status}: ${body}`);
+  }
   const data = await res.json();
   return {
     content: Buffer.from(data.content, 'base64').toString('utf-8'),
@@ -34,14 +38,20 @@ async function getFile(path: string, token: string): Promise<{ content: string; 
   };
 }
 
-async function putFile(path: string, content: string, sha: string | null, message: string, token: string) {
+async function putFile(
+  path: string,
+  content: string,
+  sha: string | null,
+  message: string,
+  token: string
+): Promise<void> {
   const body: Record<string, unknown> = {
     message,
     content: Buffer.from(content, 'utf-8').toString('base64'),
     branch: PLEX_REPO_BRANCH,
   };
   if (sha) body.sha = sha;
-  await fetch(
+  const res = await fetch(
     `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${path}`,
     {
       method: 'PUT',
@@ -53,6 +63,12 @@ async function putFile(path: string, content: string, sha: string | null, messag
       body: JSON.stringify(body),
     }
   );
+  if (!res.ok) {
+    const errBody = await res.text();
+    const err = new Error(`GitHub PUT failed ${res.status}: ${errBody}`);
+    (err as any).status = res.status;
+    throw err;
+  }
 }
 
 export async function appendSediment(entry: {
@@ -71,17 +87,32 @@ export async function appendSediment(entry: {
   });
 
   const path = sedimentPath(date);
-  const existing = await getFile(path, token);
 
-  const header = existing ? '' : `# sediment — ${date}\n`;
-  const newContent = (existing?.content ?? header) + formatEntry({ ...entry, hour });
-  const sha = existing?.sha ?? null;
+  // Retry loop — handles 409 SHA conflicts from concurrent writes
+  const MAX_RETRIES = 3;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const existing = await getFile(path, token);
+    const header = existing ? '' : `# sediment — ${date}\n`;
+    const newContent = (existing?.content ?? header) + formatEntry({ ...entry, hour });
+    const sha = existing?.sha ?? null;
 
-  await putFile(
-    path,
-    newContent,
-    sha,
-    `sediment: ${entry.mode} — ${entry.state} — ${hour} ET`,
-    token
-  );
+    try {
+      await putFile(
+        path,
+        newContent,
+        sha,
+        `sediment: ${entry.mode} — ${entry.state} — ${hour} ET`,
+        token
+      );
+      return; // success
+    } catch (err: any) {
+      if (err?.status === 409 && attempt < MAX_RETRIES - 1) {
+        // SHA conflict — another write landed between our GET and PUT.
+        // Re-fetch on next iteration with a small backoff.
+        await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
+        continue;
+      }
+      throw err; // surface all other errors (401, 422, 500, final 409)
+    }
+  }
 }

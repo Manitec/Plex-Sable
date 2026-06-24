@@ -438,8 +438,8 @@ function fireVoices(
       doc(db, "plex_voices", sessionId),
       { nyx, hex, mani, message, response: responseText.slice(0, 280), updatedAt: serverTimestamp() },
       { merge: true }
-    ).catch(() => {});
-  }).catch(() => {});
+    ).catch((err) => console.error("fireVoices setDoc failed:", err?.message));
+  }).catch((err) => console.error("fireVoices failed:", err?.message));
 }
 
 function fireDreamNode(
@@ -461,12 +461,19 @@ function fireDreamNode(
     max_tokens: 120,
   }).then(res => {
     const raw = res.choices[0].message.content?.trim() ?? '';
-    // Strip markdown code fences if present
     const cleaned = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
-    const parsed = JSON.parse(cleaned);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.error("fireDreamNode: JSON parse failed:", raw);
+      return;
+    }
     const { tone, valence, arousal, whisper } = parsed;
-    if (!tone || valence === undefined || arousal === undefined || !whisper) return;
-
+    if (!tone || valence === undefined || arousal === undefined || !whisper) {
+      console.error("fireDreamNode: missing fields:", parsed);
+      return;
+    }
     return addDoc(collection(db, 'dream_nodes'), {
       id: uuidv4(),
       sessionId,
@@ -480,7 +487,7 @@ function fireDreamNode(
       depth: 1,
       createdAt: serverTimestamp(),
     });
-  }).catch(() => {});
+  }).catch((err) => console.error("fireDreamNode failed:", err?.message));
 }
 
 export async function POST(req: NextRequest) {
@@ -532,7 +539,8 @@ export async function POST(req: NextRequest) {
 
     fireVoices(message, mode, sessionId, response);
     fireDreamNode(message, response, mode, sessionId);
-    appendSediment({ mode, state: sediment, note: response.slice(0, 280) }).catch(() => {});
+    appendSediment({ mode, state: sediment, note: response.slice(0, 280) })
+      .catch((err) => console.error("appendSediment failed:", err?.message));
 
     return NextResponse.json({ response, mode, fallback, requestSubmitted: requestSubmitted ?? null });
   } catch (err: any) {
