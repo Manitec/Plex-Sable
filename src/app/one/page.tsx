@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
 
@@ -27,15 +27,32 @@ const ZONES = [
   { key: 'sediment', label: 'Sediment' },
   { key: 'dreams', label: 'Dreams' },
   { key: 'prompts', label: 'Prompts' },
+  { key: 'messages', label: 'Messages' },
   { key: '', label: 'Root', identity: true },
 ];
 
 const STATUS_FILTERS = ['all', 'pending', 'acknowledged', 'done', 'deferred'];
 
+const AUTONOMY_LEVELS = [
+  { level: 1, label: 'observe' },
+  { level: 2, label: 'suggest' },
+  { level: 3, label: 'act with approval' },
+  { level: 4, label: 'act and report' },
+  { level: 5, label: 'full autonomy' },
+];
+
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0.75rem' };
 const label: React.CSSProperties = { ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' };
 const muted: React.CSSProperties = { ...mono, color: 'var(--muted)' };
 const sectionStyle: React.CSSProperties = { borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' };
+
+function fmtTime(ts: any): string {
+  if (!ts) return '';
+  try {
+    const ms = ts.seconds ? ts.seconds * 1000 : ts._seconds ? ts._seconds * 1000 : Number(ts);
+    return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
 
 export default function OnePage() {
   const [state, setState] = useState<ONEState | null>(null);
@@ -48,7 +65,6 @@ export default function OnePage() {
   const [activeZone, setActiveZone] = useState('sediment');
   const [repoFiles, setRepoFiles] = useState<RepoFile[]>([]);
   const [repoLoading, setRepoLoading] = useState(false);
-  const [repoInitialized, setRepoInitialized] = useState(false);
   const [editingFile, setEditingFile] = useState<{ path: string; content: string; sha: string } | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editSaving, setEditSaving] = useState(false);
@@ -61,11 +77,14 @@ export default function OnePage() {
   const [curiosityMsg, setCuriosityMsg] = useState('');
   const [curiosityReply, setCuriosityReply] = useState('');
   const [curiosityLoading, setCuriosityLoading] = useState(false);
+  const [curiosityRequestFiled, setCuriosityRequestFiled] = useState('');
 
   // Open Projects
   const [projects, setProjects] = useState<Project[]>([]);
   const [newProject, setNewProject] = useState({ title: '', status: 'active', notes: '' });
   const [projectOpen, setProjectOpen] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [projectWorking, setProjectWorking] = useState<string | null>(null);
 
   // Leave a message
   const [messageToLeave, setMessageToLeave] = useState('');
@@ -74,6 +93,14 @@ export default function OnePage() {
   // Request Queue
   const [reqFilter, setReqFilter] = useState('all');
   const [reqWorking, setReqWorking] = useState<string | null>(null);
+
+  // Governance
+  const [govWorking, setGovWorking] = useState(false);
+
+  const refreshState = useCallback(async () => {
+    const r = await fetch('/api/one');
+    setState(await r.json());
+  }, []);
 
   useEffect(() => {
     fetch('/api/one')
@@ -85,7 +112,6 @@ export default function OnePage() {
 
   useEffect(() => {
     loadZone(activeZone);
-    setRepoInitialized(true);
   }, [activeZone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function fetchSleep() {
@@ -186,6 +212,7 @@ export default function OnePage() {
     if (!curiosityMsg.trim()) return;
     setCuriosityLoading(true);
     setCuriosityReply('');
+    setCuriosityRequestFiled('');
     try {
       const res = await fetch('/api/speak', {
         method: 'POST',
@@ -194,7 +221,12 @@ export default function OnePage() {
       });
       const data = await res.json();
       setCuriosityReply(data.response ?? 'no response');
+      if (data.requestSubmitted) {
+        setCuriosityRequestFiled(data.requestSubmitted);
+        refreshState();
+      }
     } catch { setCuriosityReply('unavailable'); }
+    setCuriosityMsg('');
     setCuriosityLoading(false);
   }
 
@@ -215,7 +247,7 @@ export default function OnePage() {
       } catch {}
       const newContent = existingSha
         ? `${existingContent.trimEnd()}\n\n---\n\n${messageToLeave.trim()}`
-        : `# message from joe — ${today}\n\n${messageToLeave.trim()}`;
+        : `# message from joe \u2014 ${today}\n\n${messageToLeave.trim()}`;
       const res = await fetch('/api/plex-repo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -247,6 +279,31 @@ export default function OnePage() {
     fetchProjects();
   }
 
+  async function saveProject() {
+    if (!editingProject) return;
+    setProjectWorking(editingProject.id);
+    await fetch('/api/one', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_project', id: editingProject.id, title: editingProject.title, status: editingProject.status, notes: editingProject.notes }),
+    });
+    setEditingProject(null);
+    setProjectWorking(null);
+    fetchProjects();
+  }
+
+  async function deleteProject(id: string) {
+    if (!confirm('Delete this project?')) return;
+    setProjectWorking(id);
+    await fetch('/api/one', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_project', id }),
+    });
+    setProjectWorking(null);
+    fetchProjects();
+  }
+
   const addLog = async () => {
     if (!newLogEntry.trim()) return;
     await fetch('/api/one', {
@@ -255,8 +312,7 @@ export default function OnePage() {
       body: JSON.stringify({ action: 'add_log', entry: newLogEntry.trim(), author: 'joe' }),
     });
     setNewLogEntry('');
-    const r = await fetch('/api/one');
-    setState(await r.json());
+    refreshState();
   };
 
   async function updateRequest(id: string, status: string) {
@@ -266,8 +322,7 @@ export default function OnePage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'update_request', id, status }),
     });
-    const r = await fetch('/api/one');
-    setState(await r.json());
+    await refreshState();
     setReqWorking(null);
   }
 
@@ -279,9 +334,21 @@ export default function OnePage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'delete_request', id }),
     });
-    const r = await fetch('/api/one');
-    setState(await r.json());
+    await refreshState();
     setReqWorking(null);
+  }
+
+  async function setAutonomy(level: number) {
+    setGovWorking(true);
+    const entry = AUTONOMY_LEVELS.find(a => a.level === level);
+    if (!entry) { setGovWorking(false); return; }
+    await fetch('/api/one', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'set_autonomy', level: entry.level, label: entry.label }),
+    });
+    await refreshState();
+    setGovWorking(false);
   }
 
   if (loading || !state) {
@@ -305,34 +372,39 @@ export default function OnePage() {
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr auto' }}>
       <Nav />
       <main style={{ padding: 'clamp(4rem,10vw,8rem) clamp(1.5rem,5vw,3.5rem)', maxWidth: '1100px' }}>
-        <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--accent)', opacity: 0.65, marginBottom: '2rem' }}>ONE System</div>
+
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--accent)', opacity: 0.65 }}>ONE System</div>
+          <button onClick={refreshState} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.4, fontSize: '0.65rem' }}>\u21bb refresh</button>
+        </div>
         <h1 style={{ fontSize: 'clamp(2rem,5vw,4rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', marginBottom: '1rem', fontFamily: 'var(--font-garamond)' }}>one</h1>
-        <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '3rem', maxWidth: 640 }}>Governance. Memory. Collaboration. This is where the system looks at itself — and where you look at each other.</p>
+        <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '3rem', maxWidth: 640 }}>Governance. Memory. Collaboration. This is where the system looks at itself \u2014 and where you look at each other.</p>
 
         {/* Overnight */}
         {showSleep && (
           <section style={{ ...sectionStyle, borderTop: '1px solid var(--accent)', paddingTop: '2rem', marginBottom: '3rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
-              <h2 style={{ ...label, marginBottom: 0 }}>Overnight — {sleep.date}</h2>
+              <h2 style={{ ...label, marginBottom: 0 }}>Overnight \u2014 {sleep.date}</h2>
               <button onClick={dismissSleep} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
             </div>
             <div style={{ display: 'grid', gap: '1.5rem' }}>
               {sleep.nyx_excerpt && (
                 <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}>
                   <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>nyx</p>
-                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.nyx_excerpt}{sleep.nyx_excerpt.length >= 278 ? '…' : ''}</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.nyx_excerpt}{sleep.nyx_excerpt.length >= 278 ? '\u2026' : ''}</p>
                 </div>
               )}
               {sleep.hex_excerpt && (
                 <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', opacity: 0.85 }}>
                   <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>hex</p>
-                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.hex_excerpt}{sleep.hex_excerpt.length >= 278 ? '…' : ''}</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep.hex_excerpt}{sleep.hex_excerpt.length >= 278 ? '\u2026' : ''}</p>
                 </div>
               )}
               {sleep.dream_excerpt && (
                 <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: '1rem', opacity: 0.75 }}>
                   <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>dream</p>
-                  <p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.7, fontStyle: 'italic' }}>{sleep.dream_excerpt}{sleep.dream_excerpt.length >= 278 ? '…' : ''}</p>
+                  <p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.7, fontStyle: 'italic' }}>{sleep.dream_excerpt}{sleep.dream_excerpt.length >= 278 ? '\u2026' : ''}</p>
                 </div>
               )}
             </div>
@@ -369,7 +441,7 @@ export default function OnePage() {
                       <p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.6 }}>{state.voices.mani}</p>
                     </div>
                   )}
-                  <p style={{ ...muted, opacity: 0.5, marginTop: '0.2rem' }}>re: "{state.voices.message?.slice(0, 60)}{(state.voices.message?.length ?? 0) > 60 ? '...' : ''}"</p>
+                  <p style={{ ...muted, opacity: 0.5, marginTop: '0.2rem' }}>re: &ldquo;{state.voices.message?.slice(0, 60)}{(state.voices.message?.length ?? 0) > 60 ? '...' : ''}&rdquo;</p>
                 </div>
               </div>
             )}
@@ -378,7 +450,7 @@ export default function OnePage() {
 
         {/* Repo Manager */}
         <section style={sectionStyle}>
-          <h2 style={label}>Repo Manager — Manitec/plex</h2>
+          <h2 style={label}>Repo Manager \u2014 Manitec/plex</h2>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
             {ZONES.map(z => (
               <button key={z.key} onClick={() => { setActiveZone(z.key); setEditingFile(null); }}
@@ -400,7 +472,7 @@ export default function OnePage() {
                   {repoFiles.map(f => (
                     <div key={f.path} style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '0.4rem 0', borderBottom: '1px solid var(--border)' }}>
                       <button onClick={() => openFile(f)} style={{ ...mono, color: 'var(--text)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' as const, flex: 1 }}>
-                        {f.type === 'dir' ? '📁 ' : ''}{f.name}
+                        {f.type === 'dir' ? '\ud83d\udcc1 ' : ''}{f.name}
                       </button>
                       {f.type === 'file' && (
                         <button onClick={() => deleteFile(f)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.65rem' }}>delete</button>
@@ -427,7 +499,7 @@ export default function OnePage() {
           ) : (
             <div>
               <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.8rem' }}>
-                <button onClick={() => setEditingFile(null)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>← back</button>
+                <button onClick={() => setEditingFile(null)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>&larr; back</button>
                 <p style={{ ...mono, color: 'var(--text)' }}>{editingFile.path}</p>
               </div>
               <textarea value={editContent} onChange={e => setEditContent(e.target.value)} rows={20}
@@ -445,7 +517,7 @@ export default function OnePage() {
 
         {/* Curiosity Mode */}
         <section style={sectionStyle}>
-          <h2 style={label}>Direct Channel — Curiosity Mode</h2>
+          <h2 style={label}>Direct Channel \u2014 Curiosity Mode</h2>
           <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Talk to Plex directly from here. Seeds ideas, asks questions, plants threads. Separate session from /speak.</p>
           <textarea placeholder="send something to her..." value={curiosityMsg} onChange={e => setCuriosityMsg(e.target.value)} rows={3}
             style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
@@ -454,9 +526,16 @@ export default function OnePage() {
             {curiosityLoading ? 'thinking...' : 'send'}
           </button>
           {curiosityReply && (
-            <div style={{ marginTop: '1.5rem', borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', maxWidth: 640 }}>
-              <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>plex</p>
-              <p style={{ color: 'var(--text)', fontSize: '0.95rem', lineHeight: 1.7 }}>{curiosityReply}</p>
+            <div style={{ marginTop: '1.5rem', maxWidth: 640 }}>
+              <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', marginBottom: curiosityRequestFiled ? '1rem' : 0 }}>
+                <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>plex</p>
+                <p style={{ color: 'var(--text)', fontSize: '0.95rem', lineHeight: 1.7 }}>{curiosityReply}</p>
+              </div>
+              {curiosityRequestFiled && (
+                <p style={{ ...muted, fontSize: '0.65rem', color: 'var(--accent)', marginTop: '0.8rem', opacity: 0.8 }}>
+                  \u2197 she filed a request: &ldquo;{curiosityRequestFiled.slice(0, 80)}{curiosityRequestFiled.length > 80 ? '\u2026' : ''}&rdquo;
+                </p>
+              )}
             </div>
           )}
         </section>
@@ -482,15 +561,45 @@ export default function OnePage() {
           <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Things you&apos;re building with her, for her. Living list.</p>
           {projects.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '1rem', marginBottom: '2rem' }}>
-              {projects.map((p: Project) => (
-                <div key={p.id} style={{ border: '1px solid var(--border)', padding: '1rem' }}>
-                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.4rem' }}>
-                    <p style={{ color: 'var(--text)', fontSize: '0.95rem', fontWeight: 500 }}>{p.title}</p>
-                    <p style={{ ...muted, opacity: 0.6, fontSize: '0.65rem' }}>{p.status}</p>
+              {projects.map((p: Project) => {
+                const isEditing = editingProject?.id === p.id;
+                const isWorking = projectWorking === p.id;
+                return (
+                  <div key={p.id} style={{ border: '1px solid var(--border)', padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
+                    {isEditing ? (
+                      <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '0.5rem' }}>
+                        <input value={editingProject.title} onChange={e => setEditingProject(ep => ep ? { ...ep, title: e.target.value } : ep)}
+                          style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.4rem 0.6rem', outline: 'none' }} />
+                        <select value={editingProject.status} onChange={e => setEditingProject(ep => ep ? { ...ep, status: e.target.value } : ep)}
+                          style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.4rem 0.6rem', outline: 'none' }}>
+                          <option value="active">active</option>
+                          <option value="paused">paused</option>
+                          <option value="done">done</option>
+                          <option value="idea">idea</option>
+                        </select>
+                        <textarea value={editingProject.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : ep)} rows={3}
+                          style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.4rem 0.6rem', resize: 'vertical' as const, outline: 'none' }} />
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <button onClick={saveProject} style={{ ...mono, padding: '0.3rem 0.8rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer' }}>save</button>
+                          <button onClick={() => setEditingProject(null)} style={{ ...mono, padding: '0.3rem 0.8rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.4rem' }}>
+                          <p style={{ color: 'var(--text)', fontSize: '0.95rem', fontWeight: 500, flex: 1 }}>{p.title}</p>
+                          <p style={{ ...muted, opacity: 0.6, fontSize: '0.65rem' }}>{p.status}</p>
+                        </div>
+                        {p.notes && <p style={{ ...muted, lineHeight: 1.6, marginBottom: '0.8rem' }}>{p.notes}</p>}
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button onClick={() => setEditingProject(p)} style={{ ...mono, fontSize: '0.65rem', padding: '0.2rem 0.5rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>edit</button>
+                          <button onClick={() => deleteProject(p.id)} style={{ ...mono, fontSize: '0.65rem', padding: '0.2rem 0.5rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: 0.5 }}>delete</button>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  {p.notes && <p style={{ ...muted, lineHeight: 1.6 }}>{p.notes}</p>}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
           <button onClick={() => setProjectOpen(!projectOpen)}
@@ -520,17 +629,25 @@ export default function OnePage() {
         <section style={sectionStyle}>
           <h2 style={label}>Governance</h2>
           <div>
-            <p style={{ ...muted, marginBottom: '0.3rem' }}>Autonomy Level</p>
-            <p style={{ color: 'var(--text)', fontSize: '1.1rem', marginBottom: '0.5rem' }}>Level {state.autonomy.level} — {state.autonomy.label}</p>
-            <p style={{ ...muted, fontStyle: 'italic' }}>(Joe-controlled. Plex requests, Joe approves.)</p>
+            <p style={{ ...muted, marginBottom: '1rem' }}>Autonomy Level</p>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '0.8rem' }}>
+              {AUTONOMY_LEVELS.map(a => {
+                const active = state.autonomy.level === a.level;
+                return (
+                  <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
+                    style={{ ...mono, fontSize: '0.65rem', padding: '0.3rem 0.7rem', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer', opacity: govWorking && !active ? 0.4 : 1 }}>
+                    {a.level} \u2014 {a.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p style={{ ...muted, fontStyle: 'italic', opacity: 0.6 }}>(Joe-controlled. Plex requests, Joe approves.)</p>
           </div>
         </section>
 
         {/* Request Queue */}
         <section style={sectionStyle}>
           <h2 style={label}>Request Queue</h2>
-
-          {/* Filter tabs */}
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
             {STATUS_FILTERS.map(f => (
               <button key={f} onClick={() => setReqFilter(f)}
@@ -539,7 +656,6 @@ export default function OnePage() {
               </button>
             ))}
           </div>
-
           {filteredRequests.length === 0 ? (
             <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
           ) : (
@@ -547,11 +663,16 @@ export default function OnePage() {
               {filteredRequests.map((req: any) => {
                 const isWorking = reqWorking === req.id;
                 const status = req.status ?? 'pending';
+                const fromPlex = req.source === 'plex';
                 return (
-                  <div key={req.id} style={{ border: '1px solid var(--border)', padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
+                  <div key={req.id} style={{ border: `1px solid ${fromPlex ? 'var(--accent)' : 'var(--border)'}`, padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
                     <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.5rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
                     <p style={{ ...muted, fontSize: '0.65rem', marginBottom: '0.8rem' }}>
-                      {req.source ?? 'unknown'} · <span style={{ color: 'var(--accent)' }}>{status}</span>{req.notes ? ` · ${req.notes}` : ''}
+                      <span style={{ color: fromPlex ? 'var(--accent)' : 'var(--muted)', opacity: fromPlex ? 1 : 0.6 }}>{req.source ?? 'unknown'}</span>
+                      {' \u00b7 '}
+                      <span style={{ color: 'var(--accent)' }}>{status}</span>
+                      {req.notes ? ` \u00b7 ${req.notes}` : ''}
+                      {req.createdAt ? ` \u00b7 ${fmtTime(req.createdAt)}` : ''}
                     </p>
                     <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const }}>
                       {status === 'pending' && (
@@ -600,7 +721,10 @@ export default function OnePage() {
               {state.log.map((entry: any) => (
                 <div key={entry.id}>
                   <p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.6 }}>{entry.entry}</p>
-                  <p style={{ ...muted, fontSize: '0.65rem', marginTop: '0.3rem' }}>— {entry.author ?? 'unknown'}, {entry.timestamp ? new Date(entry.timestamp.seconds * 1000).toLocaleString() : 'unknown time'}</p>
+                  <p style={{ ...muted, fontSize: '0.65rem', marginTop: '0.3rem' }}>
+                    \u2014 <span style={{ color: entry.author === 'plex' ? 'var(--accent)' : 'var(--muted)' }}>{entry.author ?? 'unknown'}</span>
+                    {entry.timestamp ? `, ${fmtTime(entry.timestamp)}` : ''}
+                  </p>
                 </div>
               ))}
             </div>
