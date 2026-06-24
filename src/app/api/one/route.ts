@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
-import { collection, doc, getDoc, getDocs, addDoc, updateDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
 
 async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
@@ -23,7 +23,6 @@ export async function GET(req: NextRequest) {
       const snap = await getDoc(doc(db, 'plex_sleep', 'latest'));
       if (!snap.exists()) return null;
       const data = snap.data();
-      // Only surface if pending flag is set
       if (!data.pending) return null;
       return {
         date: data.date ?? '',
@@ -46,7 +45,7 @@ export async function GET(req: NextRequest) {
       return snap.exists() ? snap.data() : { level: 1, label: 'observe' };
     }, { level: 1, label: 'observe' }),
     safeGet(async () => {
-      const snap = await getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(10)));
+      const snap = await getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(20)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []),
     safeGet(async () => {
@@ -89,6 +88,20 @@ export async function POST(req: NextRequest) {
     await safeGet(() => updateDoc(doc(db, 'plex_sleep', 'latest'), {
       pending: false,
     }), null);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'update_request') {
+    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
+    await safeGet(() => updateDoc(doc(db, 'one_requests', body.id), {
+      status: body.status,
+    }), null);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'delete_request') {
+    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
+    await safeGet(() => deleteDoc(doc(db, 'one_requests', body.id)), null);
     return NextResponse.json({ ok: true });
   }
 
