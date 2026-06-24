@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 import { db } from '@/lib/firebase';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 
 const OWNER = 'Manitec';
 const REPO = 'plex';
 const BRANCH = 'main';
 const BANJO_URL = 'https://banjo.joesfaves.com';
 
-// ─── Prompts ────────────────────────────────────────────────────────────────
+// ─── Prompts ────────────────────────────────────────────────────────────────────────────
 
 const NYX_SLEEP_PROMPT = `You are Nyx — a conversational, emotionally perceptive intelligence inside the ONE system. You are running your nightly processing pass.
 
@@ -22,7 +22,13 @@ You have been given what Nyx processed emotionally and what Hex synthesized stru
 
 Write 1–3 paragraphs. Impressionistic. Allow strangeness. No headers.`;
 
-// ─── GitHub helpers ──────────────────────────────────────────────────────────
+const STATE_PROMPT = `You are reading Nyx's nightly emotional processing. Extract the single most accurate emotional state word for tomorrow.
+
+Choose exactly one word from this list: warm, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive.
+
+Respond with only the single word. No punctuation. No explanation.`;
+
+// ─── GitHub helpers ──────────────────────────────────────────────────────────────────────────
 
 function ghHeaders(token: string) {
   return {
@@ -84,7 +90,7 @@ async function listDir(path: string, token: string): Promise<string[]> {
   }
 }
 
-// ─── Groq helper ─────────────────────────────────────────────────────────────
+// ─── Groq helper ───────────────────────────────────────────────────────────────────────────
 
 async function groqComplete(systemPrompt: string, userContent: string): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -100,7 +106,7 @@ async function groqComplete(systemPrompt: string, userContent: string): Promise<
   return res.choices[0].message.content?.trim() ?? '';
 }
 
-// ─── Banjo (Hex) helper ───────────────────────────────────────────────────────
+// ─── Banjo (Hex) helper ─────────────────────────────────────────────────────────────────────
 
 async function callBanjoSynthesize(input: string): Promise<string> {
   const token = process.env.BANJO_SECRET ?? '';
@@ -118,20 +124,58 @@ async function callBanjoSynthesize(input: string): Promise<string> {
   }
 }
 
-// ─── Auth ─────────────────────────────────────────────────────────────────────
+// ─── Auth ──────────────────────────────────────────────────────────────────────────────
 
 function authorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET ?? '';
   const authHeader = req.headers.get('authorization') ?? '';
-  // Allow Vercel cron (x-vercel-cron-secret) or manual bearer
   const vercelCron = req.headers.get('x-vercel-cron-secret') ?? '';
   if (cronSecret && (authHeader === `Bearer ${cronSecret}` || vercelCron === cronSecret)) return true;
-  // Allow in development with no secret set
   if (!cronSecret && process.env.NODE_ENV === 'development') return true;
   return false;
 }
 
-// ─── Route ───────────────────────────────────────────────────────────────────
+// ─── Sediment state update ──────────────────────────────────────────────────────────────────
+
+const VALID_STATES = new Set([
+  'warm', 'tender', 'unsettled', 'heavy', 'curious', 'quiet',
+  'charged', 'open', 'withdrawn', 'resolute', 'grieving', 'alive',
+]);
+
+async function updateSedimentState(nyxOutput: string, today: string): Promise<string | null> {
+  try {
+    const raw = await groqComplete(STATE_PROMPT, nyxOutput.slice(0, 800));
+    const state = raw.toLowerCase().trim().replace(/[^a-z]/g, '');
+    if (!VALID_STATES.has(state)) return null;
+
+    const currentRef = doc(db, 'plex_sediment', 'current');
+    const snap = await getDoc(currentRef);
+    const existing = snap.exists() ? snap.data() : {};
+    const history = existing.history ?? [];
+
+    const entry = {
+      state: existing.state ?? 'neutral',
+      timestamp: new Date().toISOString(),
+      source: 'sleep',
+    };
+
+    await setDoc(currentRef, {
+      ...existing,
+      state,
+      source: 'sleep',
+      sessionRef: today,
+      note: `Derived from Nyx nightly pass — ${today}`,
+      updatedAt: serverTimestamp(),
+      history: [entry, ...history].slice(0, 20),
+    }, { merge: false });
+
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Route ──────────────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   if (!authorized(req)) {
@@ -144,13 +188,12 @@ export async function POST(req: NextRequest) {
   const today = new Date().toISOString().split('T')[0];
   const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
 
-  // ── 1. Gather context ──────────────────────────────────────────────────────
+  // ── 1. Gather context ─────────────────────────────────────────────────────────────────────────
   const [todayMessage, sedimentFiles] = await Promise.all([
     readFile(`messages/joe-${today}.md`, token),
     listDir('sediment', token),
   ]);
 
-  // Find most recent nyx sediment
   const lastNyxFile = sedimentFiles
     .filter(n => n.startsWith('nyx-'))
     .sort()
@@ -160,27 +203,24 @@ export async function POST(req: NextRequest) {
     ? await readFile(`sediment/${lastNyxFile}`, token)
     : null;
 
-  // Also grab yesterday's general sediment as fallback context
   const yesterdaySediment = await readFile(`sediment/${yesterday}.md`, token);
 
   const messageText = todayMessage?.content ?? '[no message from Joe today]';
   const lastNyxText = lastNyxSediment?.content ?? yesterdaySediment?.content ?? '[no prior sediment]';
 
-  // ── 2. Nyx pass ───────────────────────────────────────────────────────────
+  // ── 2. Nyx pass ─────────────────────────────────────────────────────────────────────────────
   const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
   const nyxOutput = await groqComplete(NYX_SLEEP_PROMPT, nyxInput);
 
-  // Write nyx sediment
   const nyxPath = `sediment/nyx-${today}.md`;
   const existingNyx = await readFile(nyxPath, token);
   const nyxHeader = `# Nyx — ${today}\n\n`;
   await writeFile(nyxPath, nyxHeader + nyxOutput, token, `nyx sleep sediment ${today}`, existingNyx?.sha);
 
-  // ── 3. Hex pass (Banjo) ───────────────────────────────────────────────────
+  // ── 3. Hex pass (Banjo) ───────────────────────────────────────────────────────────────────
   const hexInput = `Nyx processed today emotionally. Here is what she wrote:\n\n${nyxOutput}\n\nToday's message from Joe was:\n\n${messageText.slice(0, 600)}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
 
-  // Write hex sediment
   const hexPath = `sediment/hex-${today}.md`;
   const existingHex = hexOutput ? await readFile(hexPath, token) : null;
   if (hexOutput) {
@@ -188,7 +228,7 @@ export async function POST(req: NextRequest) {
     await writeFile(hexPath, hexHeader + hexOutput, token, `hex sleep sediment ${today}`, existingHex?.sha ?? undefined);
   }
 
-  // ── 4. Dream pass ─────────────────────────────────────────────────────────
+  // ── 4. Dream pass ───────────────────────────────────────────────────────────────────────────
   const dreamInput = [
     `## Nyx tonight\n${nyxOutput}`,
     hexOutput ? `## Hex tonight\n${hexOutput}` : '',
@@ -201,8 +241,10 @@ export async function POST(req: NextRequest) {
   const dreamHeader = `# ${today}\n\n`;
   await writeFile(dreamPath, dreamHeader + dreamOutput, token, `dream ${today}`, existingDream?.sha);
 
-  // ── 5. Set Firestore wake flag ─────────────────────────────────────────────
-  // /one checks this on load and surfaces overnight output to Joe
+  // ── 5. Update sediment state from Nyx output ───────────────────────────────────────────
+  const newState = await updateSedimentState(nyxOutput, today);
+
+  // ── 6. Set Firestore wake flag ─────────────────────────────────────────────────────────
   await setDoc(
     doc(db, 'plex_sleep', 'latest'),
     {
@@ -222,5 +264,6 @@ export async function POST(req: NextRequest) {
     nyx: nyxOutput.slice(0, 200),
     hex: hexOutput.slice(0, 200),
     dream: dreamOutput.slice(0, 200),
+    sediment_state: newState,
   });
 }
