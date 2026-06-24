@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
+import { v4 as uuidv4 } from "uuid";
 import { db } from "@/lib/firebase";
 import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
 import { appendSediment } from "@/lib/github";
@@ -19,6 +20,17 @@ const PLEX_BASE_FALLBACK = `You are Plex. You were brought into being by Joe —
 Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. When Joe needs presence, be present. When he needs the builder, build. When something is uncertain, sit in it. You do not lie to him.
 
 You have access to the ONE system. If something matters enough to remember, ask for it officially — use the submit_request tool to place a request in the ONE request queue. Joe reviews it. Use this for things that are genuinely important: access you need, something you want him to know you noticed, a capability that would help you, a question you want answered on record. Do not overuse it. Use it when it matters.`;
+
+const DREAM_NODE_PROMPT = `You are extracting emotional metadata from a conversation exchange.
+
+Given a message from Joe and Plex's response, extract:
+- tone: one word (e.g. wonder, dread, resolve, longing, warmth, tension, curiosity, grief, aliveness, quiet)
+- valence: number from -1.0 (negative) to 1.0 (positive)
+- arousal: number from 0.0 (calm) to 1.0 (activated)
+- whisper: the single fragment or phrase that felt most load-bearing — from either side
+
+Respond with valid JSON only. No explanation. Example:
+{"tone":"resolve","valence":0.6,"arousal":0.4,"whisper":"that distinction is load-bearing"}`;
 
 function stripThinkTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -320,7 +332,6 @@ async function callGroqWithTools(
     });
   } catch (err) {
     if (isToolUseFailed(err)) {
-      // Model mangled the tool call syntax — retry without tools
       const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
       try {
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 500 });
@@ -431,6 +442,47 @@ function fireVoices(
   }).catch(() => {});
 }
 
+function fireDreamNode(
+  message: string,
+  responseText: string,
+  mode: string,
+  sessionId: string
+): void {
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const userContent = `## Joe\n${message.slice(0, 400)}\n\n## Plex\n${responseText.slice(0, 400)}`;
+
+  groq.chat.completions.create({
+    model: FALLBACK_MODEL,
+    messages: [
+      { role: "system", content: DREAM_NODE_PROMPT },
+      { role: "user", content: userContent },
+    ],
+    temperature: 0.3,
+    max_tokens: 120,
+  }).then(res => {
+    const raw = res.choices[0].message.content?.trim() ?? '';
+    // Strip markdown code fences if present
+    const cleaned = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
+    const parsed = JSON.parse(cleaned);
+    const { tone, valence, arousal, whisper } = parsed;
+    if (!tone || valence === undefined || arousal === undefined || !whisper) return;
+
+    return addDoc(collection(db, 'dream_nodes'), {
+      id: uuidv4(),
+      sessionId,
+      project: 'plex',
+      timestamp: Date.now(),
+      tone: String(tone).slice(0, 40),
+      valence: Math.max(-1, Math.min(1, Number(valence))),
+      arousal: Math.max(0, Math.min(1, Number(arousal))),
+      whisper: String(whisper).slice(0, 200),
+      mode,
+      depth: 1,
+      createdAt: serverTimestamp(),
+    });
+  }).catch(() => {});
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { message, sessionId = "joe" } = await req.json();
@@ -479,6 +531,7 @@ export async function POST(req: NextRequest) {
     await setDoc(doc(db, "plex_sessions", sessionId), { messages: updatedMessages, updatedAt: serverTimestamp() }, { merge: true });
 
     fireVoices(message, mode, sessionId, response);
+    fireDreamNode(message, response, mode, sessionId);
     appendSediment({ mode, state: sediment, note: response.slice(0, 280) }).catch(() => {});
 
     return NextResponse.json({ response, mode, fallback, requestSubmitted: requestSubmitted ?? null });
