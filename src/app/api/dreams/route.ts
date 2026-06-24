@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server';
 
 const GITHUB_TOKEN = process.env.PLEX_SEDIMENT_TOKEN ?? process.env.GITHUB_TOKEN;
 const OWNER = 'Manitec';
-const REPO = 'Plex-Sable';
-const PATH = 'sediment';
+const REPO = 'plex';
+const PATH = 'dreams';
 
 export async function GET() {
   try {
@@ -18,9 +18,8 @@ export async function GET() {
     const files: any[] = await listRes.json();
 
     const mdFiles = files
-      .filter((f: any) => f.name.endsWith('.md'))
-      .sort((a: any, b: any) => b.name.localeCompare(a.name))
-      .slice(0, 20);
+      .filter((f: any) => f.name.match(/^\d{4}-\d{2}-\d{2}\.md$/))
+      .sort((a: any, b: any) => b.name.localeCompare(a.name));
 
     const entries = await Promise.all(mdFiles.map(async (f: any) => {
       const res = await fetch(f.download_url, {
@@ -29,7 +28,12 @@ export async function GET() {
       });
       const content = await res.text();
       const date = f.name.replace('.md', '');
-      return { date, content };
+      // Extract a meaningful preview: first non-heading, non-empty line
+      const preview = content
+        .split('\n')
+        .map((l: string) => l.trim())
+        .find((l: string) => l.length > 0 && !l.startsWith('#')) ?? '';
+      return { date, content, preview };
     }));
 
     return NextResponse.json({ entries });
