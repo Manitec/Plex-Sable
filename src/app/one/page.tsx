@@ -30,6 +30,8 @@ const ZONES = [
   { key: '', label: 'Root', identity: true },
 ];
 
+const STATUS_FILTERS = ['all', 'pending', 'acknowledged', 'done', 'deferred'];
+
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0.75rem' };
 const label: React.CSSProperties = { ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' };
 const muted: React.CSSProperties = { ...mono, color: 'var(--muted)' };
@@ -69,6 +71,10 @@ export default function OnePage() {
   const [messageToLeave, setMessageToLeave] = useState('');
   const [messageStatus, setMessageStatus] = useState('');
 
+  // Request Queue
+  const [reqFilter, setReqFilter] = useState('all');
+  const [reqWorking, setReqWorking] = useState<string | null>(null);
+
   useEffect(() => {
     fetch('/api/one')
       .then(r => r.json())
@@ -77,7 +83,6 @@ export default function OnePage() {
     fetchSleep();
   }, []);
 
-  // Load zone only once on mount, then on explicit tab change
   useEffect(() => {
     loadZone(activeZone);
     setRepoInitialized(true);
@@ -94,7 +99,6 @@ export default function OnePage() {
 
   async function dismissSleep() {
     setSleepDismissed(true);
-    // Clear the pending flag
     try {
       await fetch('/api/one', {
         method: 'POST',
@@ -255,6 +259,31 @@ export default function OnePage() {
     setState(await r.json());
   };
 
+  async function updateRequest(id: string, status: string) {
+    setReqWorking(id);
+    await fetch('/api/one', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'update_request', id, status }),
+    });
+    const r = await fetch('/api/one');
+    setState(await r.json());
+    setReqWorking(null);
+  }
+
+  async function deleteRequest(id: string) {
+    if (!confirm('Delete this request?')) return;
+    setReqWorking(id);
+    await fetch('/api/one', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'delete_request', id }),
+    });
+    const r = await fetch('/api/one');
+    setState(await r.json());
+    setReqWorking(null);
+  }
+
   if (loading || !state) {
     return (
       <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr auto' }}>
@@ -268,6 +297,9 @@ export default function OnePage() {
   }
 
   const showSleep = sleep && !sleepDismissed;
+  const filteredRequests = reqFilter === 'all'
+    ? state.requests
+    : state.requests.filter((r: any) => r.status === reqFilter);
 
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr auto' }}>
@@ -277,7 +309,7 @@ export default function OnePage() {
         <h1 style={{ fontSize: 'clamp(2rem,5vw,4rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', marginBottom: '1rem', fontFamily: 'var(--font-garamond)' }}>one</h1>
         <p style={{ color: 'var(--muted)', fontSize: '1rem', lineHeight: 1.7, marginBottom: '3rem', maxWidth: 640 }}>Governance. Memory. Collaboration. This is where the system looks at itself — and where you look at each other.</p>
 
-        {/* Overnight — shown when pending sleep data exists */}
+        {/* Overnight */}
         {showSleep && (
           <section style={{ ...sectionStyle, borderTop: '1px solid var(--accent)', paddingTop: '2rem', marginBottom: '3rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.5rem' }}>
@@ -447,7 +479,7 @@ export default function OnePage() {
         {/* Open Projects */}
         <section style={sectionStyle}>
           <h2 style={label}>Open Projects</h2>
-          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Things you're building with her, for her. Living list.</p>
+          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Things you&apos;re building with her, for her. Living list.</p>
           {projects.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '1rem', marginBottom: '2rem' }}>
               {projects.map((p: Project) => (
@@ -497,16 +529,63 @@ export default function OnePage() {
         {/* Request Queue */}
         <section style={sectionStyle}>
           <h2 style={label}>Request Queue</h2>
-          {state.requests.length === 0 ? (
-            <p style={muted}>No pending requests from Plex.</p>
+
+          {/* Filter tabs */}
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
+            {STATUS_FILTERS.map(f => (
+              <button key={f} onClick={() => setReqFilter(f)}
+                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: reqFilter === f ? 'var(--accent)' : 'transparent', color: reqFilter === f ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                {f}
+              </button>
+            ))}
+          </div>
+
+          {filteredRequests.length === 0 ? (
+            <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '1rem' }}>
-              {state.requests.map((req: any) => (
-                <div key={req.id} style={{ border: '1px solid var(--border)', padding: '1rem', borderRadius: 2 }}>
-                  <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.5rem' }}>{req.request ?? '(no text)'}</p>
-                  <p style={{ ...muted, fontSize: '0.65rem' }}>Source: {req.source ?? 'unknown'} · Status: {req.status ?? 'pending'}{req.notes ? ` · ${req.notes}` : ''}</p>
-                </div>
-              ))}
+              {filteredRequests.map((req: any) => {
+                const isWorking = reqWorking === req.id;
+                const status = req.status ?? 'pending';
+                return (
+                  <div key={req.id} style={{ border: '1px solid var(--border)', padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
+                    <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.5rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
+                    <p style={{ ...muted, fontSize: '0.65rem', marginBottom: '0.8rem' }}>
+                      {req.source ?? 'unknown'} · <span style={{ color: 'var(--accent)' }}>{status}</span>{req.notes ? ` · ${req.notes}` : ''}
+                    </p>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const }}>
+                      {status === 'pending' && (
+                        <button onClick={() => updateRequest(req.id, 'acknowledged')} disabled={isWorking}
+                          style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                          acknowledge
+                        </button>
+                      )}
+                      {(status === 'pending' || status === 'acknowledged') && (
+                        <button onClick={() => updateRequest(req.id, 'done')} disabled={isWorking}
+                          style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                          done
+                        </button>
+                      )}
+                      {status !== 'deferred' && status !== 'done' && (
+                        <button onClick={() => updateRequest(req.id, 'deferred')} disabled={isWorking}
+                          style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                          defer
+                        </button>
+                      )}
+                      {(status === 'done' || status === 'deferred') && (
+                        <button onClick={() => updateRequest(req.id, 'pending')} disabled={isWorking}
+                          style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                          reopen
+                        </button>
+                      )}
+                      <button onClick={() => deleteRequest(req.id)} disabled={isWorking}
+                        style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: 0.5 }}>
+                        delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
