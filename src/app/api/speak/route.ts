@@ -9,7 +9,7 @@ const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
 const PLEX_REPO_BRANCH = 'main';
 
-const PRIMARY_MODEL = "moonshotai/kimi-k2-instruct";
+const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
@@ -434,7 +434,6 @@ function fireVoices(
     needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
   ]).then(([nyx, hex, mani]) => {
     if (!nyx && !hex && !mani) return;
-    // addDoc to subcollection — each snapshot is its own doc, no race condition
     return addDoc(collection(db, "plex_voices", sessionId, "snapshots"), {
       nyx,
       hex,
