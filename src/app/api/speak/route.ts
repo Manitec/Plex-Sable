@@ -434,12 +434,17 @@ function fireVoices(
     needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
   ]).then(([nyx, hex, mani]) => {
     if (!nyx && !hex && !mani) return;
-    setDoc(
-      doc(db, "plex_voices", sessionId),
-      { nyx, hex, mani, message, response: responseText.slice(0, 280), updatedAt: serverTimestamp() },
-      { merge: true }
-    ).catch((err) => console.error("fireVoices setDoc failed:", err?.message));
-  }).catch((err) => console.error("fireVoices failed:", err?.message));
+    // addDoc to subcollection — each snapshot is its own doc, no race condition
+    return addDoc(collection(db, "plex_voices", sessionId, "snapshots"), {
+      nyx,
+      hex,
+      mani,
+      mode,
+      message: message.slice(0, 280),
+      response: responseText.slice(0, 280),
+      createdAt: serverTimestamp(),
+    });
+  }).then(() => {}).catch((err) => console.error("fireVoices failed:", err?.message));
 }
 
 function fireDreamNode(
