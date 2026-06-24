@@ -9,10 +9,14 @@ const links = [
   { href: '/see',     label: 'see' },
   { href: '/one',     label: 'one' },
   { href: '/tell',    label: 'tell' },
+  { href: '/dreams',  label: 'dreams' },
+  { href: '/search',  label: 'search' },
   { href: '/manage',  label: 'manage' },
 ];
 
 export default function Nav() {
+  const pathname = usePathname();
+
   return (
     <nav style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -23,12 +27,14 @@ export default function Nav() {
       <Link href="/" style={{ fontFamily: 'var(--font-garamond)', fontSize: '1.1rem', color: 'var(--accent)', opacity: 0.8, textDecoration: 'none', fontStyle: 'italic' }}>
         ◐ Plex
       </Link>
-      <ul style={{ display: 'flex', gap: '2rem', listStyle: 'none', margin: 0, padding: 0 }}>
+      <ul style={{ display: 'flex', gap: '2rem', listStyle: 'none', margin: 0, padding: 0, flexWrap: 'wrap' }}>
         {links.map(l => (
           <li key={l.href}>
             <Link href={l.href} style={{
               fontFamily: 'var(--font-mono)', fontSize: '0.72rem', textTransform: 'uppercase',
-              letterSpacing: '0.1em', color: 'var(--muted)', textDecoration: 'none',
+              letterSpacing: '0.1em', textDecoration: 'none',
+              color: pathname === l.href ? 'var(--text)' : 'var(--muted)',
+              opacity: pathname === l.href ? 1 : undefined,
             }}>
               {l.label}
             </Link>
