@@ -84,6 +84,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
+  if (action === 'update_project') {
+    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
+    await safeGet(() => updateDoc(doc(db, 'one_projects', body.id), {
+      title: body.title,
+      status: body.status,
+      notes: body.notes ?? '',
+      updatedAt: serverTimestamp(),
+    }), null);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'delete_project') {
+    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
+    await safeGet(() => deleteDoc(doc(db, 'one_projects', body.id)), null);
+    return NextResponse.json({ ok: true });
+  }
+
+  if (action === 'set_autonomy') {
+    if (body.level == null) return NextResponse.json({ error: 'missing level' }, { status: 400 });
+    await safeGet(() => updateDoc(doc(db, 'one_governance', 'autonomy'), {
+      level: body.level,
+      label: body.label ?? '',
+      updatedAt: serverTimestamp(),
+    }), null);
+    return NextResponse.json({ ok: true });
+  }
+
   if (action === 'clear_sleep') {
     await safeGet(() => updateDoc(doc(db, 'plex_sleep', 'latest'), {
       pending: false,
