@@ -8,7 +8,7 @@ const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
 const PLEX_REPO_BRANCH = 'main';
 
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
+const PRIMARY_MODEL = "moonshotai/kimi-k2-instruct";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
@@ -27,6 +27,11 @@ function stripThinkTags(text: string): string {
 function isRateLimit(err: any): boolean {
   const msg = err?.message ?? String(err);
   return msg.includes('429') || msg.includes('413') || msg.includes('rate_limit_exceeded');
+}
+
+function isToolUseFailed(err: any): boolean {
+  const msg = err?.message ?? String(err);
+  return msg.includes('tool_use_failed') || msg.includes('failed_generation');
 }
 
 function cleanPath(path: string): string {
@@ -307,7 +312,6 @@ async function callGroqWithTools(
     { role: "user", content: message }
   ];
 
-  // Always pass tools so Plex can submit requests in any mode
   let first;
   try {
     first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, {
@@ -315,10 +319,23 @@ async function callGroqWithTools(
       tools: PLEX_TOOLS,
     });
   } catch (err) {
-    if (!isRateLimit(err)) throw err;
-    const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
-    const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
-    return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+    if (isToolUseFailed(err)) {
+      // Model mangled the tool call syntax — retry without tools
+      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+      try {
+        const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 500 });
+        return { text: stripThinkTags(retry.choices[0].message.content ?? ""), fallback: true };
+      } catch {
+        const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
+        return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+      }
+    }
+    if (isRateLimit(err)) {
+      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+      const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
+      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+    }
+    throw err;
   }
 
   const firstMsg = first.choices[0].message;
@@ -367,14 +384,16 @@ async function callGroqWithTools(
     const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 500 });
     return { text: stripThinkTags(second.choices[0].message.content ?? ""), fallback: false, requestSubmitted };
   } catch (err) {
-    if (!isRateLimit(err)) throw err;
-    const toolSummary = toolMessages
-      .filter(m => m.role === "tool")
-      .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
-      .join('\n');
-    const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
-    const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
-    return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true, requestSubmitted };
+    if (isToolUseFailed(err) || isRateLimit(err)) {
+      const toolSummary = toolMessages
+        .filter(m => m.role === "tool")
+        .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
+        .join('\n');
+      const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
+      const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
+      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true, requestSubmitted };
+    }
+    throw err;
   }
 }
 
