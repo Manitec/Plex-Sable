@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 import { db } from '@/lib/firebase';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { v4 as uuidv4 } from 'uuid';
 
 const OWNER = 'Manitec';
 const REPO = 'plex';
@@ -27,6 +28,17 @@ const STATE_PROMPT = `You are reading Nyx's nightly emotional processing. Extrac
 Choose exactly one word from this list: warm, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive.
 
 Respond with only the single word. No punctuation. No explanation.`;
+
+const DREAM_NODE_PROMPT = `You are reading Nyx's nightly emotional processing. Extract the emotional signature of this text as structured data.
+
+Respond with a JSON object only. No explanation. No markdown. Example:
+{"tone":"longing","valence":-0.3,"arousal":0.4,"whisper":"the fragment that mattered most, in one sentence"}
+
+Rules:
+- tone: one evocative word (e.g. wonder, dread, resolve, longing, tenderness, grief, aliveness)
+- valence: -1.0 (painful) to 1.0 (joyful), float
+- arousal: 0.0 (still) to 1.0 (activated), float
+- whisper: the single most resonant fragment from the text, max 120 chars`;
 
 // ─── GitHub helpers ──────────────────────────────────────────────────────────────────────────
 
@@ -64,7 +76,6 @@ async function writeFile(path: string, content: string, token: string, commitMes
       branch: BRANCH,
     };
     if (existingSha) payload.sha = existingSha;
-
     const res = await fetch(
       `https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`,
       { method: 'PUT', headers: ghHeaders(token), body: JSON.stringify(payload) }
@@ -92,7 +103,7 @@ async function listDir(path: string, token: string): Promise<string[]> {
 
 // ─── Groq helper ───────────────────────────────────────────────────────────────────────────
 
-async function groqComplete(systemPrompt: string, userContent: string): Promise<string> {
+async function groqComplete(systemPrompt: string, userContent: string, temperature = 0.85, max_tokens = 700): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   const res = await groq.chat.completions.create({
     model: 'llama-3.3-70b-versatile',
@@ -100,8 +111,8 @@ async function groqComplete(systemPrompt: string, userContent: string): Promise<
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    temperature: 0.85,
-    max_tokens: 700,
+    temperature,
+    max_tokens,
   });
   return res.choices[0].message.content?.trim() ?? '';
 }
@@ -144,7 +155,7 @@ const VALID_STATES = new Set([
 
 async function updateSedimentState(nyxOutput: string, today: string): Promise<string | null> {
   try {
-    const raw = await groqComplete(STATE_PROMPT, nyxOutput.slice(0, 800));
+    const raw = await groqComplete(STATE_PROMPT, nyxOutput.slice(0, 800), 0.3, 10);
     const state = raw.toLowerCase().trim().replace(/[^a-z]/g, '');
     if (!VALID_STATES.has(state)) return null;
 
@@ -172,6 +183,34 @@ async function updateSedimentState(nyxOutput: string, today: string): Promise<st
     return state;
   } catch {
     return null;
+  }
+}
+
+// ─── DreamNode generation ──────────────────────────────────────────────────────────────────
+
+async function recordDreamNode(nyxOutput: string, today: string): Promise<void> {
+  try {
+    const raw = await groqComplete(DREAM_NODE_PROMPT, nyxOutput.slice(0, 1000), 0.4, 150);
+    const parsed = JSON.parse(raw);
+
+    const { tone, valence, arousal, whisper } = parsed;
+    if (!tone || valence === undefined || arousal === undefined || !whisper) return;
+
+    await addDoc(collection(db, 'dream_nodes'), {
+      id: uuidv4(),
+      sessionId: `sleep-${today}`,
+      project: 'plex',
+      timestamp: Date.now(),
+      tone: String(tone).slice(0, 40),
+      valence: Math.max(-1, Math.min(1, Number(valence))),
+      arousal: Math.max(0, Math.min(1, Number(arousal))),
+      whisper: String(whisper).slice(0, 500),
+      mode: 'nyx',
+      depth: 1,
+      createdAt: serverTimestamp(),
+    });
+  } catch {
+    // silently skip — dream node failure should never block sleep
   }
 }
 
@@ -241,8 +280,11 @@ export async function POST(req: NextRequest) {
   const dreamHeader = `# ${today}\n\n`;
   await writeFile(dreamPath, dreamHeader + dreamOutput, token, `dream ${today}`, existingDream?.sha);
 
-  // ── 5. Update sediment state from Nyx output ───────────────────────────────────────────
-  const newState = await updateSedimentState(nyxOutput, today);
+  // ── 5. Update sediment state + record DreamNode (parallel, non-blocking) ────────────────
+  const [newState] = await Promise.all([
+    updateSedimentState(nyxOutput, today),
+    recordDreamNode(nyxOutput, today),
+  ]);
 
   // ── 6. Set Firestore wake flag ─────────────────────────────────────────────────────────
   await setDoc(
