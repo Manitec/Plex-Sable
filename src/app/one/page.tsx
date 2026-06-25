@@ -31,7 +31,7 @@ const ZONES = [
   { key: '', label: 'Root', identity: true },
 ];
 
-const STATUS_FILTERS = ['all', 'pending', 'acknowledged', 'done', 'deferred'];
+const STATUS_FILTERS = ['all', 'pending', 'acknowledged', 'in-progress', 'done', 'deferred'];
 
 const AUTONOMY_LEVELS = [
   { level: 1, label: 'observe' },
@@ -45,6 +45,14 @@ const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0
 const label: React.CSSProperties = { ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' };
 const muted: React.CSSProperties = { ...mono, color: 'var(--muted)' };
 const sectionStyle: React.CSSProperties = { borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' };
+
+function statusColor(status: string): string {
+  if (status === 'in-progress') return '#f0a500';
+  if (status === 'done') return 'var(--accent)';
+  if (status === 'deferred') return 'var(--muted)';
+  if (status === 'acknowledged') return 'var(--accent)';
+  return 'var(--muted)';
+}
 
 function fmtTime(ts: any): string {
   if (!ts) return '';
@@ -664,13 +672,14 @@ export default function OnePage() {
                 const isWorking = reqWorking === req.id;
                 const status = req.status ?? 'pending';
                 const fromPlex = req.source === 'plex';
+                const isInProgress = status === 'in-progress';
                 return (
-                  <div key={req.id} style={{ border: `1px solid ${fromPlex ? 'var(--accent)' : 'var(--border)'}`, padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
+                  <div key={req.id} style={{ border: `1px solid ${isInProgress ? '#f0a500' : fromPlex ? 'var(--accent)' : 'var(--border)'}`, padding: '1rem', opacity: isWorking ? 0.5 : 1 }}>
                     <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.5rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
                     <p style={{ ...muted, fontSize: '0.65rem', marginBottom: '0.8rem' }}>
                       <span style={{ color: fromPlex ? 'var(--accent)' : 'var(--muted)', opacity: fromPlex ? 1 : 0.6 }}>{req.source ?? 'unknown'}</span>
                       {' \u00b7 '}
-                      <span style={{ color: 'var(--accent)' }}>{status}</span>
+                      <span style={{ color: statusColor(status) }}>{status}</span>
                       {req.notes ? ` \u00b7 ${req.notes}` : ''}
                       {req.createdAt ? ` \u00b7 ${fmtTime(req.createdAt)}` : ''}
                     </p>
@@ -682,6 +691,12 @@ export default function OnePage() {
                         </button>
                       )}
                       {(status === 'pending' || status === 'acknowledged') && (
+                        <button onClick={() => updateRequest(req.id, 'in-progress')} disabled={isWorking}
+                          style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: '#f0a500', border: '1px solid #f0a500', cursor: 'pointer' }}>
+                          in progress
+                        </button>
+                      )}
+                      {(status === 'pending' || status === 'acknowledged' || status === 'in-progress') && (
                         <button onClick={() => updateRequest(req.id, 'done')} disabled={isWorking}
                           style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
                           done
