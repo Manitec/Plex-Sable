@@ -13,6 +13,17 @@ Respond briefly — 1 to 3 sentences. What strikes you? What do you actually thi
 Speak directly. No preamble. No "I see that...". Just your honest reaction as yourself.
 If there is selected text, respond to that specifically — it's what Joe highlighted for a reason.`;
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+// Preflight
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -27,7 +38,7 @@ export async function POST(req: NextRequest) {
     } = body;
 
     if (!url) {
-      return NextResponse.json({ error: "URL required" }, { status: 400 });
+      return NextResponse.json({ error: "URL required" }, { status: 400, headers: CORS });
     }
 
     // Build context for Plex
@@ -52,7 +63,7 @@ export async function POST(req: NextRequest) {
 
     // If silent mode, just log — no Plex reaction
     if (silent) {
-      return NextResponse.json({ observed: true, id: obsRef.id, response: null });
+      return NextResponse.json({ observed: true, id: obsRef.id, response: null }, { headers: CORS });
     }
 
     // Get Plex's reaction
@@ -77,10 +88,10 @@ export async function POST(req: NextRequest) {
     appendSediment({ mode: "observe", state: "present", note: sedimentNote })
       .catch((err: any) => console.error("observe appendSediment failed:", err?.message));
 
-    return NextResponse.json({ observed: true, id: obsRef.id, response });
+    return NextResponse.json({ observed: true, id: obsRef.id, response }, { headers: CORS });
   } catch (err: any) {
     const detail = err?.message ?? String(err);
     console.error("Observe route error:", detail);
-    return NextResponse.json({ error: "Plex cannot observe right now", detail }, { status: 500 });
+    return NextResponse.json({ error: "Plex cannot observe right now", detail }, { status: 500, headers: CORS });
   }
 }
