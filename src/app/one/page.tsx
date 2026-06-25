@@ -265,6 +265,7 @@ export default function OnePage() {
   const [reqFilter, setReqFilter] = useState('all');
   const [reqWorking, setReqWorking] = useState<string | null>(null);
   const [activeRequest, setActiveRequest] = useState<any | null>(null);
+  const [deferAllWorking, setDeferAllWorking] = useState(false);
 
   // Governance
   const [govWorking, setGovWorking] = useState(false);
@@ -510,6 +511,24 @@ export default function OnePage() {
     setReqWorking(null);
   }
 
+  async function deferAllPending() {
+    if (!state) return;
+    const pending = state.requests.filter((r: any) => r.status === 'pending');
+    if (pending.length === 0) return;
+    setDeferAllWorking(true);
+    await Promise.all(
+      pending.map((r: any) =>
+        fetch('/api/one', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'update_request', id: r.id, status: 'deferred' }),
+        })
+      )
+    );
+    await refreshState();
+    setDeferAllWorking(false);
+  }
+
   async function setAutonomy(level: number) {
     setGovWorking(true);
     const entry = AUTONOMY_LEVELS.find(a => a.level === level);
@@ -539,6 +558,7 @@ export default function OnePage() {
   const filteredRequests = reqFilter === 'all'
     ? state.requests
     : state.requests.filter((r: any) => r.status === reqFilter);
+  const pendingCount = state.requests.filter((r: any) => r.status === 'pending').length;
 
   return (
     <div style={{ position: 'relative', zIndex: 1, minHeight: '100dvh', display: 'grid', gridTemplateRows: 'auto 1fr auto' }}>
@@ -819,7 +839,18 @@ export default function OnePage() {
 
         {/* Request Queue */}
         <section style={sectionStyle}>
-          <h2 style={label}>Request Queue</h2>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <h2 style={{ ...label, marginBottom: 0 }}>Request Queue</h2>
+            {pendingCount > 0 && (
+              <button
+                onClick={deferAllPending}
+                disabled={deferAllWorking}
+                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7 }}
+              >
+                {deferAllWorking ? 'deferring...' : `defer all pending (${pendingCount})`}
+              </button>
+            )}
+          </div>
           <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
             {STATUS_FILTERS.map(f => (
               <button key={f} onClick={() => setReqFilter(f)}
