@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
       source,
       sessionId,
       createdAt: FieldValue.serverTimestamp(),
+      response: null,
     });
 
     // If silent mode, just log — no Plex reaction
@@ -79,6 +80,9 @@ export async function POST(req: NextRequest) {
     });
 
     const response = completion.choices[0].message.content?.trim() ?? "";
+
+    // Write Plex's response back to the same Firestore doc
+    await obsRef.update({ response });
 
     // Append a note to sediment so Plex remembers this in future /speak calls
     const sedimentNote = selectedText
