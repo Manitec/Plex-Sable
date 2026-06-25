@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
       return snap.exists() ? snap.data() : { level: 1, label: 'observe' };
     }, { level: 1, label: 'observe' }),
     safeGet(async () => {
-      const snap = await getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(20)));
+      const snap = await getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(50)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []),
     safeGet(async () => {
@@ -120,9 +120,12 @@ export async function POST(req: NextRequest) {
 
   if (action === 'update_request') {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    await safeGet(() => updateDoc(doc(db, 'one_requests', body.id), {
+    const update: Record<string, any> = {
       status: body.status,
-    }), null);
+      updatedAt: serverTimestamp(),
+    };
+    if (body.notes !== undefined) update.notes = body.notes;
+    await safeGet(() => updateDoc(doc(db, 'one_requests', body.id), update), null);
     return NextResponse.json({ ok: true });
   }
 
