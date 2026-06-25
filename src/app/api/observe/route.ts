@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
-import { db } from "@/lib/firebase";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { getAdminDb } from "@/lib/firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { appendSediment } from "@/lib/github";
 
 const OBSERVE_MODEL = "llama-3.3-70b-versatile";
@@ -38,15 +38,16 @@ export async function POST(req: NextRequest) {
     else if (pageText) contextParts.push(`Page content:\n${pageText.slice(0, 800)}`);
     const context = contextParts.join("\n");
 
-    // Log to Firestore immediately
-    const obsRef = await addDoc(collection(db, "plex_observations"), {
+    // Log to Firestore via Admin SDK (bypasses security rules)
+    const db = getAdminDb();
+    const obsRef = await db.collection("plex_observations").add({
       url,
       title: title ?? null,
       selectedText: selectedText ?? null,
       pageText: pageText ? pageText.slice(0, 2000) : null,
       source,
       sessionId,
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
 
     // If silent mode, just log — no Plex reaction
