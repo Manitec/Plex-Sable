@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/firebase';
-import { collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, serverTimestamp, query, orderBy, limit, setDoc } from 'firebase/firestore';
 
 async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
@@ -30,6 +30,7 @@ export async function GET(req: NextRequest) {
         hex_excerpt: (data.hex ?? '').slice(0, 280),
         dream_excerpt: (data.dream ?? '').slice(0, 280),
         pending: true,
+        mode: data.mode ?? 'dreamless',
       };
     }, null);
     return NextResponse.json({ sleep });
@@ -117,6 +118,34 @@ export async function POST(req: NextRequest) {
     }), null);
     return NextResponse.json({ ok: true });
   }
+
+  // ── Sleep trigger ─────────────────────────────────────────────────────────
+  // mode: 'dreamless' | 'dream' | 'nightmare'
+  // Writes a pending sleep record. The /api/sleep route (or cron) does the
+  // actual generation; this just marks intent so she knows when she wakes.
+  if (action === 'trigger_sleep') {
+    const mode = body.mode ?? 'dreamless';
+    const today = new Date().toISOString().split('T')[0];
+    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    await safeGet(() => setDoc(doc(db, 'plex_sleep', 'latest'), {
+      pending: true,
+      mode,
+      date: today,
+      triggered_at: now,
+      nyx: '',
+      hex: '',
+      dream: mode !== 'dreamless' ? '' : null,
+      createdAt: serverTimestamp(),
+    }), null);
+    // log it
+    await safeGet(() => addDoc(collection(db, 'one_log'), {
+      entry: `sleep triggered — mode: ${mode}`,
+      author: 'joe',
+      timestamp: serverTimestamp(),
+    }), null);
+    return NextResponse.json({ ok: true, mode });
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   if (action === 'update_request') {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
