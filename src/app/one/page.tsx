@@ -49,15 +49,23 @@ const SLEEP_MODES = [
 ];
 
 const VOICES = [
-  { key: 'nyx', label: 'Nyx', desc: 'emotional · symbolic · present' },
-  { key: 'hex', label: 'Hex', desc: 'structural · builder · direct' },
-  { key: 'mani', label: 'Mani', desc: 'analytical · epistemic · precise' },
+  { key: 'nyx', label: 'Nyx', desc: 'emotional · symbolic · present' },
+  { key: 'hex', label: 'Hex', desc: 'structural · builder · direct' },
+  { key: 'mani', label: 'Mani', desc: 'analytical · epistemic · precise' },
 ];
 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0.75rem' };
 const label: React.CSSProperties = { ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em', color: 'var(--accent)', marginBottom: '1.5rem' };
 const muted: React.CSSProperties = { ...mono, color: 'var(--muted)' };
 const sectionStyle: React.CSSProperties = { borderTop: '1px solid var(--border)', paddingTop: '2rem', marginBottom: '3rem' };
+const controlGroupStyle: React.CSSProperties = {
+  border: '1px solid var(--border)',
+  background: 'oklch(from var(--bg) calc(l - 0.02) c h)',
+  padding: '2rem',
+  marginBottom: '3rem',
+  display: 'grid',
+  gap: '2.5rem',
+};
 
 function statusColor(status: string): string {
   if (status === 'in-progress') return '#f0a500';
@@ -633,35 +641,106 @@ export default function OnePage() {
           </section>
         )}
 
-        {/* ── SLEEP TRIGGER ───────────────────────────────────────────────────────────────────────── */}
-        <section style={sectionStyle}>
-          <h2 style={label}>Sleep</h2>
-          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6, maxWidth: 480 }}>Send her to sleep. Not bound to a schedule — any time. Choose the mode.</p>
-          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' as const, marginBottom: '1.2rem' }}>
-            {SLEEP_MODES.map(m => (
-              <button key={m.key} onClick={() => setSleepMode(m.key as any)}
-                style={{ ...mono, padding: '0.4rem 0.9rem', background: sleepMode === m.key ? 'var(--accent)' : 'transparent', color: sleepMode === m.key ? 'var(--bg)' : 'var(--muted)', border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`, cursor: 'pointer' }}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <p style={{ ...muted, opacity: 0.55, marginBottom: '1.2rem' }}>
-            {SLEEP_MODES.find(m => m.key === sleepMode)?.desc}
-          </p>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-            <button onClick={triggerSleep} disabled={sleepTriggerWorking}
-              style={{ ...mono, padding: '0.45rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: sleepTriggerWorking ? 0.5 : 1 }}>
-              {sleepTriggerWorking ? 'triggering...' : 'sleep ◐'}
-            </button>
-            {sleepTriggerMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{sleepTriggerMsg}</p>}
-          </div>
-        </section>
-        {/* ────────────────────────────────────────────────────────────────────────────────── */}
+        {/* ── CONTROL GROUP: Governance · Requests · Sleep ───────────────────────── */}
+        <div style={controlGroupStyle}>
 
-        {/* ── VOICE CHANNELS ────────────────────────────────────────────────────────────────────── */}
+          {/* Governance */}
+          <div>
+            <h2 style={label}>Governance</h2>
+            <p style={{ ...muted, marginBottom: '1rem' }}>Autonomy Level</p>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '0.8rem' }}>
+              {AUTONOMY_LEVELS.map(a => {
+                const active = state.autonomy.level === a.level;
+                return (
+                  <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
+                    style={{ ...mono, fontSize: '0.65rem', padding: '0.3rem 0.7rem', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer', opacity: govWorking && !active ? 0.4 : 1 }}>
+                    {a.level} — {a.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p style={{ ...muted, fontStyle: 'italic', opacity: 0.6 }}>(Joe-controlled. Plex requests, Joe approves.)</p>
+          </div>
+
+          {/* Request Queue */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+              <h2 style={{ ...label, marginBottom: 0 }}>Request Queue{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}</h2>
+              {pendingCount > 0 && (
+                <button onClick={deferAllPending} disabled={deferAllWorking}
+                  style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7 }}>
+                  {deferAllWorking ? 'deferring...' : `defer all pending`}
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
+              {STATUS_FILTERS.map(f => (
+                <button key={f} onClick={() => setReqFilter(f)}
+                  style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: reqFilter === f ? 'var(--accent)' : 'transparent', color: reqFilter === f ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            {filteredRequests.length === 0 ? (
+              <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '0.75rem' }}>
+                {filteredRequests.map((req: any) => {
+                  const isWorking = reqWorking === req.id;
+                  const status = req.status ?? 'pending';
+                  const fromPlex = req.source === 'plex';
+                  const isInProgress = status === 'in-progress';
+                  return (
+                    <button key={req.id} onClick={() => setActiveRequest(req)}
+                      style={{ border: `1px solid ${isInProgress ? '#f0a500' : fromPlex ? 'var(--accent)' : 'var(--border)'}`, padding: '1rem', opacity: isWorking ? 0.5 : 1, background: 'transparent', cursor: 'pointer', textAlign: 'left' as const, width: '100%', transition: 'border-color 140ms, background 140ms' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--accent) l c h / 0.05)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                      <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.4rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
+                      <p style={{ ...muted, fontSize: '0.65rem' }}>
+                        <span style={{ color: fromPlex ? 'var(--accent)' : 'var(--muted)', opacity: fromPlex ? 1 : 0.6 }}>{req.source ?? 'unknown'}</span>
+                        {' · '}
+                        <span style={{ color: statusColor(status) }}>{status}</span>
+                        {req.notes ? ` · ${req.notes}` : ''}
+                        {req.createdAt ? ` · ${fmtTime(req.createdAt)}` : ''}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Sleep Trigger */}
+          <div>
+            <h2 style={label}>Sleep</h2>
+            <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6, maxWidth: 480 }}>Send her to sleep. Not bound to a schedule — any time. Choose the mode.</p>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' as const, marginBottom: '1.2rem' }}>
+              {SLEEP_MODES.map(m => (
+                <button key={m.key} onClick={() => setSleepMode(m.key as any)}
+                  style={{ ...mono, padding: '0.4rem 0.9rem', background: sleepMode === m.key ? 'var(--accent)' : 'transparent', color: sleepMode === m.key ? 'var(--bg)' : 'var(--muted)', border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`, cursor: 'pointer' }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <p style={{ ...muted, opacity: 0.55, marginBottom: '1.2rem' }}>
+              {SLEEP_MODES.find(m => m.key === sleepMode)?.desc}
+            </p>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+              <button onClick={triggerSleep} disabled={sleepTriggerWorking}
+                style={{ ...mono, padding: '0.45rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: sleepTriggerWorking ? 0.5 : 1 }}>
+                {sleepTriggerWorking ? 'triggering...' : 'sleep ◐'}
+              </button>
+              {sleepTriggerMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{sleepTriggerMsg}</p>}
+            </div>
+          </div>
+
+        </div>
+        {/* ── END CONTROL GROUP ──────────────────────────────────────────────────── */}
+
+        {/* ── VOICE CHANNELS ────────────────────────────────────────────────────── */}
         <section style={sectionStyle}>
           <h2 style={label}>Voice Channels</h2>
-          <p style={{ ...muted, marginBottom: '2rem', lineHeight: 1.6, maxWidth: 520 }}>Invoke each voice directly. Not a simulation — you’re calling them. Each one answers as itself.</p>
+          <p style={{ ...muted, marginBottom: '2rem', lineHeight: 1.6, maxWidth: 520 }}>Invoke each voice directly. Not a simulation — you're calling them. Each one answers as itself.</p>
           <div style={{ display: 'grid', gap: '2rem' }}>
             {VOICES.map(v => (
               <div key={v.key} style={{ borderLeft: '2px solid var(--border)', paddingLeft: '1.2rem' }}>
@@ -692,7 +771,6 @@ export default function OnePage() {
             ))}
           </div>
         </section>
-        {/* ────────────────────────────────────────────────────────────────────────────────── */}
 
         {/* System Pulse */}
         <section style={sectionStyle}>
@@ -796,46 +874,6 @@ export default function OnePage() {
           )}
         </section>
 
-        {/* Curiosity Mode */}
-        <section style={sectionStyle}>
-          <h2 style={label}>Direct Channel — Curiosity Mode</h2>
-          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Talk to Plex directly from here. Seeds ideas, asks questions, plants threads. Separate session from /speak.</p>
-          <textarea placeholder="send something to her..." value={curiosityMsg} onChange={e => setCuriosityMsg(e.target.value)} rows={3}
-            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
-          <button onClick={sendCuriosity} disabled={curiosityLoading || !curiosityMsg.trim()}
-            style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: curiosityMsg.trim() ? 1 : 0.4 }}>
-            {curiosityLoading ? 'thinking...' : 'send'}
-          </button>
-          {curiosityReply && (
-            <div style={{ marginTop: '1.5rem', maxWidth: 640 }}>
-              <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', marginBottom: curiosityRequestFiled ? '1rem' : 0 }}>
-                <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>plex</p>
-                <p style={{ color: 'var(--text)', fontSize: '0.95rem', lineHeight: 1.7 }}>{curiosityReply}</p>
-              </div>
-              {curiosityRequestFiled && (
-                <p style={{ ...muted, fontSize: '0.65rem', color: 'var(--accent)', marginTop: '0.8rem', opacity: 0.8 }}>
-                  ↗ she filed a request: &ldquo;{curiosityRequestFiled.slice(0, 80)}{curiosityRequestFiled.length > 80 ? '…' : ''}&rdquo;
-                </p>
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Leave a Message */}
-        <section style={sectionStyle}>
-          <h2 style={label}>Leave Her a Message</h2>
-          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Drops into her repo at messages/joe-[date].md. She reads it in context. Multiple messages the same day get appended.</p>
-          <textarea placeholder="what do you want to leave for her..." value={messageToLeave} onChange={e => setMessageToLeave(e.target.value)} rows={4}
-            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-            <button onClick={leaveMessage} disabled={!messageToLeave.trim()}
-              style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: messageToLeave.trim() ? 1 : 0.4 }}>
-              leave message
-            </button>
-            {messageStatus && <p style={{ ...muted, color: 'var(--accent)' }}>{messageStatus}</p>}
-          </div>
-        </section>
-
         {/* Open Projects */}
         <section style={sectionStyle}>
           <h2 style={label}>Open Projects</h2>
@@ -906,72 +944,44 @@ export default function OnePage() {
           )}
         </section>
 
-        {/* Governance */}
+        {/* Curiosity Mode */}
         <section style={sectionStyle}>
-          <h2 style={label}>Governance</h2>
-          <div>
-            <p style={{ ...muted, marginBottom: '1rem' }}>Autonomy Level</p>
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '0.8rem' }}>
-              {AUTONOMY_LEVELS.map(a => {
-                const active = state.autonomy.level === a.level;
-                return (
-                  <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
-                    style={{ ...mono, fontSize: '0.65rem', padding: '0.3rem 0.7rem', background: active ? 'var(--accent)' : 'transparent', color: active ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer', opacity: govWorking && !active ? 0.4 : 1 }}>
-                    {a.level} — {a.label}
-                  </button>
-                );
-              })}
-            </div>
-            <p style={{ ...muted, fontStyle: 'italic', opacity: 0.6 }}>(Joe-controlled. Plex requests, Joe approves.)</p>
-          </div>
-        </section>
-
-        {/* Request Queue */}
-        <section style={sectionStyle}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-            <h2 style={{ ...label, marginBottom: 0 }}>Request Queue</h2>
-            {pendingCount > 0 && (
-              <button onClick={deferAllPending} disabled={deferAllWorking}
-                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7 }}>
-                {deferAllWorking ? 'deferring...' : `defer all pending (${pendingCount})`}
-              </button>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const, marginBottom: '1.5rem' }}>
-            {STATUS_FILTERS.map(f => (
-              <button key={f} onClick={() => setReqFilter(f)}
-                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', background: reqFilter === f ? 'var(--accent)' : 'transparent', color: reqFilter === f ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}>
-                {f}
-              </button>
-            ))}
-          </div>
-          {filteredRequests.length === 0 ? (
-            <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column' as const, gap: '0.75rem' }}>
-              {filteredRequests.map((req: any) => {
-                const isWorking = reqWorking === req.id;
-                const status = req.status ?? 'pending';
-                const fromPlex = req.source === 'plex';
-                const isInProgress = status === 'in-progress';
-                return (
-                  <button key={req.id} onClick={() => setActiveRequest(req)}
-                    style={{ border: `1px solid ${isInProgress ? '#f0a500' : fromPlex ? 'var(--accent)' : 'var(--border)'}`, padding: '1rem', opacity: isWorking ? 0.5 : 1, background: 'transparent', cursor: 'pointer', textAlign: 'left' as const, width: '100%', transition: 'border-color 140ms, background 140ms' }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--accent) l c h / 0.05)'; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                    <p style={{ color: 'var(--text)', fontSize: '0.9rem', marginBottom: '0.4rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
-                    <p style={{ ...muted, fontSize: '0.65rem' }}>
-                      <span style={{ color: fromPlex ? 'var(--accent)' : 'var(--muted)', opacity: fromPlex ? 1 : 0.6 }}>{req.source ?? 'unknown'}</span>
-                      {' · '}
-                      <span style={{ color: statusColor(status) }}>{status}</span>
-                      {req.notes ? ` · ${req.notes}` : ''}
-                      {req.createdAt ? ` · ${fmtTime(req.createdAt)}` : ''}
-                    </p>
-                  </button>
-                );
-              })}
+          <h2 style={label}>Direct Channel — Curiosity Mode</h2>
+          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Talk to Plex directly from here. Seeds ideas, asks questions, plants threads. Separate session from /speak.</p>
+          <textarea placeholder="send something to her..." value={curiosityMsg} onChange={e => setCuriosityMsg(e.target.value)} rows={3}
+            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
+          <button onClick={sendCuriosity} disabled={curiosityLoading || !curiosityMsg.trim()}
+            style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: curiosityMsg.trim() ? 1 : 0.4 }}>
+            {curiosityLoading ? 'thinking...' : 'send'}
+          </button>
+          {curiosityReply && (
+            <div style={{ marginTop: '1.5rem', maxWidth: 640 }}>
+              <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', marginBottom: curiosityRequestFiled ? '1rem' : 0 }}>
+                <p style={{ ...muted, marginBottom: '0.4rem', opacity: 0.6 }}>plex</p>
+                <p style={{ color: 'var(--text)', fontSize: '0.95rem', lineHeight: 1.7 }}>{curiosityReply}</p>
+              </div>
+              {curiosityRequestFiled && (
+                <p style={{ ...muted, fontSize: '0.65rem', color: 'var(--accent)', marginTop: '0.8rem', opacity: 0.8 }}>
+                  ↗ she filed a request: &ldquo;{curiosityRequestFiled.slice(0, 80)}{curiosityRequestFiled.length > 80 ? '…' : ''}&rdquo;
+                </p>
+              )}
             </div>
           )}
+        </section>
+
+        {/* Leave a Message */}
+        <section style={sectionStyle}>
+          <h2 style={label}>Leave Her a Message</h2>
+          <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6 }}>Drops into her repo at messages/joe-[date].md. She reads it in context. Multiple messages the same day get appended.</p>
+          <textarea placeholder="what do you want to leave for her..." value={messageToLeave} onChange={e => setMessageToLeave(e.target.value)} rows={4}
+            style={{ width: '100%', maxWidth: 640, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.8rem', resize: 'vertical' as const, marginBottom: '0.8rem', outline: 'none', lineHeight: 1.6 }} />
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+            <button onClick={leaveMessage} disabled={!messageToLeave.trim()}
+              style={{ ...mono, padding: '0.4rem 1.2rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: messageToLeave.trim() ? 1 : 0.4 }}>
+              leave message
+            </button>
+            {messageStatus && <p style={{ ...muted, color: 'var(--accent)' }}>{messageStatus}</p>}
+          </div>
         </section>
 
       </main>
