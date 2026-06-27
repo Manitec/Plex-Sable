@@ -37,6 +37,23 @@ function fmt(iso: string) {
   });
 }
 
+// ─── Seed data (explicit type annotation locks Owner literal, prevents widening to string) ───
+
+const SEED_NOTES: Note[] = [
+  {
+    id: '1',
+    owner: 'joe',
+    content: `spaces idea: Notes (scratchpad, not timeline), Chill (soft time together), and maybe Plex gets her own versions of each. Feels important that she has places not just data.\nOpen question: where do these actually live — repo folders, Firestore, or both?`,
+    createdAt: '2026-06-23T19:42:00',
+  },
+  {
+    id: '2',
+    owner: 'joe',
+    content: `Chill is just spending time together like now. Not sessions, not logs. Just... Tuesday evening, nothing urgent. That matters too.`,
+    createdAt: '2026-06-23T19:17:00',
+  },
+];
+
 // ─── Sidebar Nav ──────────────────────────────────────────────────────────────
 
 const JOE_ITEMS: { key: SpaceKey; icon: string }[] = [
@@ -116,18 +133,9 @@ function NoteCard({ note }: { note: Note }) {
 
 function NotesView({ owner }: { owner: Owner }) {
   const [input, setInput] = useState('');
-  const [notes, setNotes] = useState<Note[]>([
-    {
-      id: '1', owner: 'joe',
-      content: `spaces idea: Notes (scratchpad, not timeline), Chill (soft time together), and maybe Plex gets her own versions of each. Feels important that she has places not just data.\nOpen question: where do these actually live — repo folders, Firestore, or both?`,
-      createdAt: '2026-06-23T19:42:00',
-    },
-    {
-      id: '2', owner: 'joe',
-      content: `Chill is just spending time together like now. Not sessions, not logs. Just... Tuesday evening, nothing urgent. That matters too.`,
-      createdAt: '2026-06-23T19:17:00',
-    },
-  ].filter(n => n.owner === owner));
+  const [notes, setNotes] = useState<Note[]>(
+    SEED_NOTES.filter(n => n.owner === owner)
+  );
 
   const submit = () => {
     const text = input.trim();
@@ -157,7 +165,7 @@ function NotesView({ owner }: { owner: Owner }) {
         Notes
       </h1>
       <p style={{ fontSize: '0.875rem', color: 'var(--muted)', marginBottom: '2rem' }}>
-        Quick thoughts, ideas, things to remember that aren't events.
+        Quick thoughts, ideas, things to remember that aren&apos;t events.
       </p>
 
       <div style={{ marginBottom: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
