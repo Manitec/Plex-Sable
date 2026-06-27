@@ -14,6 +14,22 @@
   --ease-out:  cubic-bezier(0.16, 1, 0.3, 1);
   --background: var(--bg);
   --foreground: var(--text);
+
+  /* ── --color-* aliases for ONE shell ── */
+  --color-bg:               var(--bg);
+  --color-surface:          var(--surface);
+  --color-surface-offset:   var(--surface-2);
+  --color-surface-offset-2: #1e1e1c;
+  --color-surface-dynamic:  #242422;
+  --color-border:           var(--border);
+  --color-text:             var(--text);
+  --color-text-muted:       var(--muted);
+  --color-text-faint:       #4a4845;
+  --color-primary:          var(--accent);
+  --color-primary-hover:    #d4a882;
+  --color-warning:          #f59e0b;
+  --color-warning-highlight: #2d1f00;
+  --color-warning-active:   #b45309;
 }
 
 @theme inline {
