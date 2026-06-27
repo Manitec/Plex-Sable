@@ -1164,9 +1164,9 @@ function SpacesView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void })
 // ─── Nav Items ────────────────────────────────────────────────────────────────
 
 const NAV_ITEMS: { id: View; symbol: string; label: string }[] = [
-  { id: 'one',     symbol: '◐', label: 'one' },
+  { id: 'one',     symbol: '◐', label: 'one'     },
   { id: 'session', symbol: '⋯', label: 'session' },
-  { id: 'spaces',  symbol: '◫', label: 'spaces' },
+  { id: 'spaces',  symbol: '◫', label: 'voices'  },
 ];
 
 // ─── Root Shell ───────────────────────────────────────────────────────────────
@@ -1196,7 +1196,7 @@ export default function OnePage() {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr', minHeight: '100dvh', background: 'var(--bg)', color: 'var(--text)' }}>
 
-      {/* Sidebar */}
+      {/* ── Sidebar ── */}
       <aside style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center',
         paddingBlock: '1.5rem', gap: '0.25rem',
@@ -1204,7 +1204,12 @@ export default function OnePage() {
         background: 'oklch(from var(--bg) calc(l - 0.015) c h)',
         position: 'sticky', top: 0, height: '100dvh',
       }}>
-        <span style={{ ...mono, fontSize: '0.5rem', letterSpacing: '0.18em', color: 'var(--accent)', opacity: 0.5, marginBottom: '1.25rem', textTransform: 'uppercase' }}>ONE</span>
+        {/* brand */}
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', letterSpacing: '0.18em', color: 'var(--accent)', opacity: 0.5, marginBottom: '1.25rem', textTransform: 'uppercase' }}>
+          ONE
+        </span>
+
+        {/* nav buttons */}
         {NAV_ITEMS.map(item => {
           const active = view === item.id;
           return (
@@ -1220,13 +1225,39 @@ export default function OnePage() {
               onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
             >
               <span style={{ fontSize: '1rem', lineHeight: 1 }}>{item.symbol}</span>
-              <span style={{ ...mono, fontSize: '0.45rem', letterSpacing: '0.1em', textTransform: 'lowercase' }}>{item.label}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.45rem', letterSpacing: '0.1em', textTransform: 'lowercase' }}>{item.label}</span>
             </button>
           );
         })}
+
+        {/* divider */}
+        <div style={{ width: '24px', height: '1px', background: 'var(--border)', margin: '0.5rem 0' }} />
+
+        {/* /spaces external link */}
+        <a
+          href="/spaces"
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.1em', textDecoration: 'none', color: 'var(--muted)', padding: '0.4rem 0.25rem', borderRadius: 6, transition: 'color 120ms' }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--text)')}
+          onMouseLeave={e => (e.currentTarget.style.color = 'var(--muted)')}
+        >
+          spaces
+        </a>
+
+        {/* spacer */}
+        <div style={{ flex: 1 }} />
+
+        {/* ← plex */}
+        <a
+          href="/plex"
+          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.12em', textDecoration: 'none', color: 'var(--muted)', opacity: 0.45, padding: '0.4rem 0.25rem', borderRadius: 6, transition: 'opacity 120ms', writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+          onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
+          onMouseLeave={e => (e.currentTarget.style.opacity = '0.45')}
+        >
+          ← plex
+        </a>
       </aside>
 
-      {/* Main */}
+      {/* ── Main ── */}
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', overflow: 'hidden' }}>
 
         <SessionStrip
