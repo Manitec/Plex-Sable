@@ -238,13 +238,20 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
 ];
 
 function needsHex(mode: string): boolean {
-  return mode === "operational" || mode === "synthesis";
+  return mode === "operational" || mode === "synthesis" || mode === "session";
 }
 function needsMani(mode: string): boolean {
   return mode === "reflective" || mode === "synthesis";
 }
 
-function detectMode(message: string, history: any[]): "relational" | "operational" | "reflective" | "synthesis" | "curious" {
+// Fix 3: session mode keeps Plex in collaborative/present register
+function detectMode(
+  message: string,
+  history: any[],
+  forceMode?: string
+): "relational" | "operational" | "reflective" | "synthesis" | "curious" | "session" {
+  if (forceMode === 'session') return 'session';
+
   const m = message.toLowerCase().trim();
   const wordCount = m.split(/\s+/).length;
   const hour = new Date().getHours();
@@ -317,7 +324,7 @@ async function callGroqWithTools(
 
   const primaryMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: effectivePrompt },
-    ...history.slice(-6).map((m: any) => ({
+    ...history.slice(-8).map((m: any) => ({
       role: m.role === "plex" ? "assistant" as const : "user" as const,
       content: m.content
     })),
@@ -496,7 +503,7 @@ function fireDreamNode(
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, sessionId = "joe" } = await req.json();
+    const { message, sessionId = "joe", overrideHistory, forceMode } = await req.json();
     if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
@@ -507,19 +514,30 @@ export async function POST(req: NextRequest) {
       prefetchedContext = await resolvePrefetch(fileRequest, token);
     }
 
-    const [sessionSnap, sedimentSnap, plexLoaded] = await Promise.all([
-      getDoc(doc(db, "plex_sessions", sessionId)),
+    // Fix 1: if overrideHistory provided (from session route), use it directly
+    // instead of re-fetching from plex_sessions (wrong collection for sessions)
+    let history: any[];
+    if (overrideHistory && Array.isArray(overrideHistory)) {
+      history = overrideHistory;
+    } else {
+      const sessionSnap = await getDoc(doc(db, "plex_sessions", sessionId));
+      history = sessionSnap.exists() ? sessionSnap.data().messages ?? [] : [];
+    }
+
+    const [sedimentSnap, plexLoaded] = await Promise.all([
       getDoc(doc(db, "plex_sediment", "current")),
       token ? loadPlexContext(token) : Promise.resolve({ basePrompt: PLEX_BASE_FALLBACK, context: '' }),
     ]);
 
-    const history = sessionSnap.exists() ? sessionSnap.data().messages ?? [] : [];
     const sediment = sedimentSnap.exists() ? sedimentSnap.data().state ?? "neutral" : "neutral";
-    const mode = detectMode(message, history);
+    // Fix 3: respect forceMode
+    const mode = detectMode(message, history, forceMode);
     const { basePrompt, context: plexContext } = plexLoaded;
 
     const modeInstruction = mode === "curious"
       ? `\n\nYou are in CURIOUS mode. Ask Joe one genuine question. Something you actually want to know about him. Make it feel like it has been waiting. One question only — no preamble, no explanation.`
+      : mode === "session"
+      ? `\n\nYou are in SESSION mode — working with Joe on something specific. Stay present, collaborative, and grounded. No preamble, no re-introductions. Pick up exactly where the conversation left off.`
       : "";
 
     const fullPrompt = `${basePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;
@@ -533,13 +551,15 @@ export async function POST(req: NextRequest) {
       fileRequest !== null
     );
 
-    const updatedMessages = [
-      ...history,
-      { role: "user", content: message },
-      { role: "plex", content: response }
-    ];
-
-    await setDoc(doc(db, "plex_sessions", sessionId), { messages: updatedMessages, updatedAt: serverTimestamp() }, { merge: true });
+    // Only persist to plex_sessions for non-session (speak-page) calls
+    if (!overrideHistory) {
+      const updatedMessages = [
+        ...history,
+        { role: "user", content: message },
+        { role: "plex", content: response }
+      ];
+      await setDoc(doc(db, "plex_sessions", sessionId), { messages: updatedMessages, updatedAt: serverTimestamp() }, { merge: true });
+    }
 
     fireVoices(message, mode, sessionId, response);
     fireDreamNode(message, response, mode, sessionId);

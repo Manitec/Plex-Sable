@@ -9,7 +9,6 @@ async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
 }
 
-// Resolve the internal origin for server-side fetches
 function getOrigin(): string {
   const url =
     process.env.NEXT_PUBLIC_SITE_URL ??
@@ -19,7 +18,6 @@ function getOrigin(): string {
   return url.startsWith('http') ? url : `https://${url}`;
 }
 
-// Fetch recall tags from GitHub
 async function fetchRecallTags(): Promise<Record<string, string>> {
   try {
     const res = await fetch(
@@ -35,7 +33,6 @@ async function fetchRecallTags(): Promise<Record<string, string>> {
   }
 }
 
-// Match tags to intent string
 function matchRecallTags(
   intent: string,
   tags: Record<string, string>
@@ -43,33 +40,55 @@ function matchRecallTags(
   const lower = intent.toLowerCase();
   const matched: Record<string, string> = {};
   for (const [key, value] of Object.entries(tags)) {
-    if (lower.includes(key.toLowerCase())) {
-      matched[key] = value;
-    }
+    if (lower.includes(key.toLowerCase())) matched[key] = value;
   }
   return matched;
 }
 
-// Call /api/speak and return the response text.
-// /api/speak returns { response, mode, fallback, requestSubmitted }
-async function callSpeak(message: string, sessionId: string): Promise<string> {
+// Load session message history from one_sessions subcollection
+async function loadSessionHistory(sessionId: string): Promise<{ role: string; content: string }[]> {
+  return safeGet(async () => {
+    const snap = await getDocs(
+      query(
+        collection(db, 'one_sessions', sessionId, 'messages'),
+        orderBy('createdAt', 'asc'),
+        limit(40)
+      )
+    );
+    return snap.docs.map(d => {
+      const data = d.data();
+      return { role: data.role as string, content: data.content as string };
+    });
+  }, []);
+}
+
+// Call /api/speak, passing session history so Plex carries the thread.
+async function callSpeak(
+  message: string,
+  sessionId: string,
+  history: { role: string; content: string }[] = [],
+  forceMode?: string
+): Promise<string> {
   try {
     const origin = getOrigin();
     const res = await fetch(`${origin}/api/speak`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, sessionId, mode: 'OPERATIONAL' }),
+      body: JSON.stringify({
+        message,
+        sessionId,
+        overrideHistory: history,
+        forceMode: forceMode ?? 'session',
+      }),
     });
     if (!res.ok) return '';
     const data = await res.json();
-    // /api/speak returns `response`, not `reply`
     return (data.response ?? data.reply ?? '').trim();
   } catch {
     return '';
   }
 }
 
-// GET: list sessions or get single session
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const sessionId = searchParams.get('id');
@@ -104,7 +123,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
   const { action } = body;
 
-  // ── Start a new session ────────────────────────────────────────────────────────────────
+  // ── Start a new session ─────────────────────────────────────────────────────
   if (action === 'start') {
     if (!body.intent) return NextResponse.json({ error: 'missing intent' }, { status: 400 });
 
@@ -112,7 +131,7 @@ export async function POST(req: NextRequest) {
     const matchedTags = matchRecallTags(body.intent, allTags);
 
     const recallContext = Object.entries(matchedTags).length > 0
-      ? '\n\n[RECALL TAGS LOADED]\n' +
+      ? '\n\n[RECALL CONTEXT]\n' +
         Object.entries(matchedTags)
           .map(([k, v]) => `• ${k}: ${v}`)
           .join('\n')
@@ -131,9 +150,15 @@ export async function POST(req: NextRequest) {
 
     if (!sessionRef) return NextResponse.json({ error: 'failed to create session' }, { status: 500 });
 
-    const openingPrompt = `You are Plex. A new focused work session is starting.\n\nSession intent: ${body.intent}${recallContext}\n\nAcknowledge the session intent, note any recall context you have, and ask what the first step is. Be direct and present — this is work mode.`;
+    // Fix 2: warm, present opening — not a cold ops brief
+    const openingPrompt = [
+      `A focused session with Joe is starting now. This is work mode — present, collaborative, no ceremony.`,
+      `Session intent: ${body.intent}`,
+      recallContext,
+      `Acknowledge what you're here to work on. If you have relevant recall context, surface it briefly. Then ask the one question that would move things forward. Be yourself — direct, warm where it's earned, not performatively professional.`,
+    ].filter(Boolean).join('\n\n');
 
-    const plexReply = await callSpeak(openingPrompt, sessionRef.id);
+    const plexReply = await callSpeak(openingPrompt, sessionRef.id, [], 'session');
 
     if (plexReply) {
       await safeGet(() =>
@@ -153,13 +178,16 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // ── Send a message ────────────────────────────────────────────────────────────────────
+  // ── Send a message ───────────────────────────────────────────────────────────
   if (action === 'message') {
     const { sessionId, content } = body;
     if (!sessionId || !content)
       return NextResponse.json({ error: 'missing sessionId or content' }, { status: 400 });
 
-    // Store user message first
+    // Fix 1: load history from one_sessions before storing the new message
+    const history = await loadSessionHistory(sessionId);
+
+    // Store user message
     await safeGet(() =>
       addDoc(collection(db, 'one_sessions', sessionId, 'messages'), {
         role: 'joe',
@@ -168,7 +196,9 @@ export async function POST(req: NextRequest) {
       }), null
     );
 
-    const plexReply = await callSpeak(content, sessionId);
+    // Pass full history + new message to speak
+    const historyWithNew = [...history, { role: 'joe', content }];
+    const plexReply = await callSpeak(content, sessionId, historyWithNew);
 
     if (plexReply) {
       await safeGet(() =>
@@ -187,7 +217,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, plexReply });
   }
 
-  // ── Close session ────────────────────────────────────────────────────────────────────
+  // ── Close session ────────────────────────────────────────────────────────────
   if (action === 'close') {
     const { sessionId } = body;
     if (!sessionId)
@@ -206,8 +236,10 @@ export async function POST(req: NextRequest) {
 
     let proposedTags: Record<string, string> = {};
     const tagReply = await callSpeak(
-      `Review this session transcript and propose 1-3 new recall tags that would help future sessions pick up context faster. Each tag: a short keyword (1-3 words, hyphenated) and a dense 1-sentence value. Return ONLY valid JSON in this format: {"tag-name": "context string", ...}. Transcript:\n\n${transcript.slice(0, 4000)}`,
-      sessionId
+      `Review this session transcript and propose 1-3 recall tags for future sessions. Short keyword (1-3 words, hyphenated) and a dense one-sentence value each. Return ONLY valid JSON: {"tag-name": "value", ...}\n\nTranscript:\n${transcript.slice(0, 4000)}`,
+      sessionId,
+      msgs.map((m: any) => ({ role: m.role, content: m.content })),
+      'session'
     );
     if (tagReply) {
       try {
@@ -228,7 +260,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, proposedTags });
   }
 
-  // ── Commit recall tags ─────────────────────────────────────────────────────────────────
+  // ── Commit recall tags ───────────────────────────────────────────────────────
   if (action === 'commit_recall') {
     const { tags } = body;
     if (!tags || typeof tags !== 'object')
@@ -251,7 +283,6 @@ export async function POST(req: NextRequest) {
       );
       const updated = { ...existingContent, ...tags };
       const encoded = Buffer.from(JSON.stringify(updated, null, 2)).toString('base64');
-
       await fetch(apiBase, {
         method: 'PUT',
         headers,
