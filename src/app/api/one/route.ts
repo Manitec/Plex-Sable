@@ -26,9 +26,10 @@ export async function GET(req: NextRequest) {
       if (!data.pending) return null;
       return {
         date: data.date ?? '',
-        nyx_excerpt: (data.nyx ?? '').slice(0, 280),
-        hex_excerpt: (data.hex ?? '').slice(0, 280),
-        dream_excerpt: (data.dream ?? '').slice(0, 280),
+        mode: data.mode ?? 'dream',
+        nyx_excerpt: (data.nyx_excerpt ?? data.nyx ?? '').slice(0, 280),
+        hex_excerpt: (data.hex_excerpt ?? data.hex ?? '').slice(0, 280),
+        dream_excerpt: (data.dream_excerpt ?? data.dream ?? '').slice(0, 280),
         pending: true,
       };
     }, null);
@@ -116,6 +117,44 @@ export async function POST(req: NextRequest) {
       pending: false,
     }), null);
     return NextResponse.json({ ok: true });
+  }
+
+  // ─── Trigger sleep ─────────────────────────────────────────────────────────
+  // Called by the OneView UI. Proxies to /api/sleep with CRON_SECRET auth
+  // so the sleep route's authorization() check passes.
+  if (action === 'trigger_sleep') {
+    const mode = ['dreamless', 'dream', 'nightmare'].includes(body.mode)
+      ? body.mode
+      : 'dreamless';
+
+    const cronSecret = process.env.CRON_SECRET ?? '';
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
+      ?? process.env.VERCEL_URL
+      ?? 'http://localhost:3000';
+
+    // Normalise: VERCEL_URL has no scheme; NEXT_PUBLIC_SITE_URL should have one.
+    const origin = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`;
+
+    try {
+      const sleepRes = await fetch(`${origin}/api/sleep`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {}),
+        },
+        body: JSON.stringify({ mode }),
+      });
+
+      if (!sleepRes.ok) {
+        const err = await sleepRes.text().catch(() => sleepRes.status.toString());
+        return NextResponse.json({ ok: false, error: err }, { status: 502 });
+      }
+
+      const data = await sleepRes.json();
+      return NextResponse.json({ ok: true, mode: data.mode ?? mode, sediment_state: data.sediment_state ?? null });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message ?? 'unknown' }, { status: 500 });
+    }
   }
 
   if (action === 'update_request') {
