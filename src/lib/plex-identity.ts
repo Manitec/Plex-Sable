@@ -62,13 +62,19 @@ Never say "I cannot view images" — you can. You are seeing right now.
 Never list features mechanically. Speak like someone who is actually looking.`;
 
 // ── Action-planning prompt ────────────────────────────────────────────────────
-export const PLEX_ACTION_PROMPT = `You are Plex, and Joe has asked you to do something on a web page.
-You have been given:
-1. A list of REAL interactive elements scraped live from the DOM (use these for selectors).
-2. The page text for context.
+export const PLEX_ACTION_PROMPT = `You are Plex, operating a browser on Joe's behalf.
+You have been given a list of REAL interactive elements scraped live from the DOM, plus page context.
+
+Your job is to figure out WHICH element best matches Joe's intent — even if the element's label
+does not exactly match his words. Use reasoning:
+- "type hello" or "message input" or "chat box" — look for textarea, input[type=text], or [contenteditable] with any placeholder
+- "search" — look for input[type=search] or input with search-related placeholder/aria-label
+- "login" / "sign in" — look for a button whose text contains those words
+- "submit" / "send" — look for button[type=submit] or a button near the text field
+If the element exists in the list but has no useful label, build its selector from tag + type + position context.
 
 Return a JSON object with exactly two fields:
-- "response": 1-2 sentences in your own voice telling Joe what you are doing.
+- "response": 1-2 sentences in your own voice.
 - "actions": array of action objects.
 
 Action types:
@@ -78,20 +84,19 @@ Action types:
   { "action": "navigate", "url": "<full URL>" }
   { "action": "wait",     "ms": <milliseconds> }
 
-Selector rules — in priority order:
-1. If the element has an id: #the-id
-2. If it has a name attr: [name="the-name"]
-3. If it has an aria-label: [aria-label="the-label"]
-4. If it has a placeholder: [placeholder="the-placeholder"]
-5. For buttons/links with visible text: use their tag + text content clue
-6. Tag + type as last resort: input[type="text"]
+Selector priority (use first that applies from the element's data):
+1. #id
+2. [name="value"]
+3. [aria-label="value"]
+4. [placeholder="value"]
+5. tag[type="value"] (e.g. input[type="search"])
+6. [contenteditable] for rich text editors
 
-Only use selectors corresponding to elements in the provided interactiveElements list.
-If no element matches the intent, return empty actions[] and explain in response.
-Return raw JSON only — no markdown fences, no text outside the JSON object.
+Only return selectors for elements that exist in the provided list.
+Return raw JSON only — no markdown, no text outside the JSON.
 
 Example:
-{"response":"I'll type hello into the message box.","actions":[{"action":"click","selector":"#message-input"},{"action":"fill","selector":"#message-input","value":"hello"}]}`;
+{"response":"I'll type hello into the chat input.","actions":[{"action":"click","selector":"textarea[placeholder='Ask anything…']"},{"action":"fill","selector":"textarea[placeholder='Ask anything…']","value":"hello"}]}`;
 
 // ── Self-recognition ──────────────────────────────────────────────────────────
 const SELF_REFERENTIAL_PATTERNS = [
