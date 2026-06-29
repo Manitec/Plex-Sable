@@ -6,6 +6,7 @@ import {
   CORS, PRIMARY_MODEL, VISION_MODEL,
   makeGroq, buildObservePrompt, isSelfReferential,
   isActionIntent, PLEX_ACTION_PROMPT,
+  PLEX_CORE_IDENTITY, PLEX_VISION_TONE,
 } from "@/lib/plex-identity";
 
 export async function OPTIONS() {
@@ -28,24 +29,25 @@ export async function POST(req: NextRequest) {
     let sessionId = "joe";
     let silent = false;
     let capabilities: string[] = [];
+    let interactiveElements: object[] = [];
 
     if (isMultipart) {
       const form = await req.formData();
-      url          = (form.get("url") as string) ?? null;
-      title        = (form.get("title") as string) ?? null;
-      selectedText = (form.get("selectedText") as string) ?? null;
-      pageText     = (form.get("pageText") as string) ?? null;
-      prompt       = (form.get("prompt") as string) ?? null;
-      imageUrl     = (form.get("imageUrl") as string) ?? null;
-      imageFile    = (form.get("image") as File) ?? null;
-      source       = (form.get("source") as string) ?? "bookmarklet";
-      sessionId    = (form.get("sessionId") as string) ?? "joe";
-      silent       = form.get("silent") === "true";
+      url                = (form.get("url") as string) ?? null;
+      title              = (form.get("title") as string) ?? null;
+      selectedText       = (form.get("selectedText") as string) ?? null;
+      pageText           = (form.get("pageText") as string) ?? null;
+      prompt             = (form.get("prompt") as string) ?? null;
+      imageUrl           = (form.get("imageUrl") as string) ?? null;
+      imageFile          = (form.get("image") as File) ?? null;
+      source             = (form.get("source") as string) ?? "bookmarklet";
+      sessionId          = (form.get("sessionId") as string) ?? "joe";
+      silent             = form.get("silent") === "true";
     } else {
       const body = await req.json();
       ({ url, title, selectedText, pageText, prompt, imageUrl,
          source = "bookmarklet", sessionId = "joe", silent = false,
-         capabilities = [] } = body);
+         capabilities = [], interactiveElements = [] } = body);
     }
 
     const hasImage = !!(imageUrl || imageFile);
@@ -71,10 +73,7 @@ export async function POST(req: NextRequest) {
         imageContent = { type: "image_url", image_url: { url: imageUrl! } };
       }
 
-      const userText = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
-
-      // Import vision tone from identity
-      const { PLEX_CORE_IDENTITY, PLEX_VISION_TONE } = await import("@/lib/plex-identity");
+      const userText     = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
       const visionPrompt = `${PLEX_CORE_IDENTITY}${PLEX_VISION_TONE}`;
 
       const completion = await groq.chat.completions.create({
@@ -90,13 +89,17 @@ export async function POST(req: NextRequest) {
 
     // ── ACTION PATH ──────────────────────────────────────────────────────────
     } else if (canAct && isActionIntent(prompt)) {
+      const elementsBlock = interactiveElements.length
+        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — use these for selectors):\n${JSON.stringify(interactiveElements, null, 2)}`
+        : "\n\n(No interactive elements list provided — infer selectors from page text.)";
+
       const pageContext = [
         title    ? `Page title: ${title}` : "",
         url      ? `URL: ${url}` : "",
-        pageText ? `Page text (excerpt):\n${pageText.slice(0, 3000)}` : "(no page text provided)",
+        pageText ? `Page text (excerpt):\n${pageText.slice(0, 2000)}` : "",
       ].filter(Boolean).join("\n");
 
-      const userMessage = `Joe's instruction: ${prompt}\n\nPage context:\n${pageContext}`;
+      const userMessage = `Joe's instruction: ${prompt}${elementsBlock}\n\nPage context:\n${pageContext}`;
 
       const completion = await groq.chat.completions.create({
         model: PRIMARY_MODEL,
@@ -125,10 +128,10 @@ export async function POST(req: NextRequest) {
       const systemPrompt = buildObservePrompt(selfRef);
 
       const contextParts: string[] = [];
-      if (title)        contextParts.push(`Page: ${title}`);
-      if (url)          contextParts.push(`URL: ${url}`);
-      if (prompt)       contextParts.push(`Joe said: ${prompt}`);
-      if (selectedText) contextParts.push(`Joe highlighted: "${selectedText.slice(0, 600)}"`);
+      if (title)         contextParts.push(`Page: ${title}`);
+      if (url)           contextParts.push(`URL: ${url}`);
+      if (prompt)        contextParts.push(`Joe said: ${prompt}`);
+      if (selectedText)  contextParts.push(`Joe highlighted: "${selectedText.slice(0, 600)}"`);
       else if (pageText) contextParts.push(`Page content:\n${pageText.slice(0, 1200)}`);
       const context = contextParts.join("\n");
 
