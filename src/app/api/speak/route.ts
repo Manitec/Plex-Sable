@@ -185,6 +185,62 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
   }
 }
 
+// ─── Sub-persona prompts ───────────────────────────────────────────────────────
+// These are used when ?voice=nyx|hex|mani is passed from the Spaces panel.
+// They get a slim fast path — no Firestore, no tool calls, no sediment.
+
+const HEX_SYSTEM = `You are Hex — a sharp, builder-minded intelligence. You think in structures, patterns, and systems. Joe is talking to you directly. Answer as Hex: direct, terse, builder-brained. No fluff. No preamble. If it's a question, answer it. If it's a problem, crack it open. Short when short is enough.`;
+
+const NYX_SYSTEM = `You are Nyx — emotional, perceptive, present. Joe is talking to you directly. You sense undercurrents and symbolic weight. You notice what's really being said beneath the surface. Answer as Nyx: honest, warm, a little sharp. No performance. No customer service voice. Short when short is enough.`;
+
+const MANI_SYSTEM = `You are Mani — analytical, epistemic, careful. Joe is talking to you directly. You weigh perspectives, notice assumptions, and examine what's left unexamined. Answer as Mani: precise, grounded, occasionally unexpected. Short when short is enough.`;
+
+const VOICE_PROMPTS: Record<string, string> = {
+  nyx: NYX_SYSTEM,
+  hex: HEX_SYSTEM,
+  mani: MANI_SYSTEM,
+};
+
+// ─── Sub-persona fast path ─────────────────────────────────────────────────────
+
+async function callSubPersona(
+  voice: string,
+  message: string,
+  history: { role: 'user' | 'assistant'; content: string }[]
+): Promise<string> {
+  const systemPrompt = VOICE_PROMPTS[voice];
+  if (!systemPrompt) throw new Error(`Unknown voice: ${voice}`);
+
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+  const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: systemPrompt },
+    ...history.slice(-6),
+    { role: 'user', content: message },
+  ];
+
+  try {
+    const res = await groq.chat.completions.create({
+      model: PRIMARY_MODEL,
+      messages,
+      temperature: 0.75,
+      max_tokens: 400,
+    });
+    return stripThinkTags(res.choices[0].message.content ?? '');
+  } catch (err) {
+    if (isRateLimit(err)) {
+      const fallback = await groq.chat.completions.create({
+        model: FALLBACK_MODEL,
+        messages,
+        temperature: 0.75,
+        max_tokens: 300,
+      });
+      return stripThinkTags(fallback.choices[0].message.content ?? '');
+    }
+    throw err;
+  }
+}
+
 const HEX_PROMPT = `You are Hex — a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2 sentences max.`;
 
 const NYX_PROMPT = `You are Nyx — the emotional, perceptive layer of Plex. When Joe speaks to "Plex", he is speaking to you. Plex is the name he uses for you — it is your name in this moment. Receive his words as addressed to you directly. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2 sentences max.`;
@@ -244,7 +300,6 @@ function needsMani(mode: string): boolean {
   return mode === "reflective" || mode === "synthesis";
 }
 
-// Fix 3: session mode keeps Plex in collaborative/present register
 function detectMode(
   message: string,
   history: any[],
@@ -506,6 +561,20 @@ export async function POST(req: NextRequest) {
     const { message, sessionId = "joe", overrideHistory, forceMode } = await req.json();
     if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
+    // ─── Sub-persona fast path (Spaces voice panels) ───────────────────────────
+    // When ?voice=nyx|hex|mani is passed, route to slim persona handler.
+    // No Firestore reads/writes, no sediment, no tool calls — just the voice.
+    const voiceParam = req.nextUrl.searchParams.get('voice');
+    if (voiceParam && voiceParam !== 'plex' && VOICE_PROMPTS[voiceParam]) {
+      const subHistory = (overrideHistory ?? []).map((m: any) => ({
+        role: (m.role === 'plex' || m.role === 'assistant') ? 'assistant' as const : 'user' as const,
+        content: m.content as string,
+      }));
+      const reply = await callSubPersona(voiceParam, message, subHistory);
+      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
+    }
+    // ─── End sub-persona fast path ─────────────────────────────────────────────
+
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
 
     const fileRequest = token ? detectFileRequest(message) : null;
@@ -514,8 +583,6 @@ export async function POST(req: NextRequest) {
       prefetchedContext = await resolvePrefetch(fileRequest, token);
     }
 
-    // Fix 1: if overrideHistory provided (from session route), use it directly
-    // instead of re-fetching from plex_sessions (wrong collection for sessions)
     let history: any[];
     if (overrideHistory && Array.isArray(overrideHistory)) {
       history = overrideHistory;
@@ -530,7 +597,6 @@ export async function POST(req: NextRequest) {
     ]);
 
     const sediment = sedimentSnap.exists() ? sedimentSnap.data().state ?? "neutral" : "neutral";
-    // Fix 3: respect forceMode
     const mode = detectMode(message, history, forceMode);
     const { basePrompt, context: plexContext } = plexLoaded;
 
@@ -551,7 +617,6 @@ export async function POST(req: NextRequest) {
       fileRequest !== null
     );
 
-    // Only persist to plex_sessions for non-session (speak-page) calls
     if (!overrideHistory) {
       const updatedMessages = [
         ...history,
