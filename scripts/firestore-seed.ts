@@ -22,13 +22,8 @@ async function seedDoc(
   label: string
 ) {
   const ref = db.collection(collection).doc(docId);
-  const snap = await ref.get();
-  if (snap.exists) {
-    console.log(`  ⏭  SKIP   ${label} — already exists`);
-  } else {
-    await ref.set(data);
-    console.log(`  ✅ SEEDED ${label}`);
-  }
+  await ref.set(data, { merge: true });
+  console.log(`  ✅ SEEDED/UPDATED ${label}`);
 }
 
 // ─── Seed ────────────────────────────────────────────────────────────────────
