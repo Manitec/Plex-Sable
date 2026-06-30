@@ -326,10 +326,12 @@ export async function POST(req: NextRequest) {
 
   const dreamOutput = await groqComplete(dreamPrompt, dreamInput);
 
-  const dreamPath = `dreams/${today}.md`;
-  const existingDream = await readFile(dreamPath, token);
-  const dreamHeader = `# ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
-  await writeFile(dreamPath, dreamHeader + dreamOutput, token, `dream ${mode} ${today}`, existingDream?.sha);
+  // Plex's sleep-pass synthesis lives in sediment alongside nyx and hex —
+  // dreams/{today}.md is owned by the dream-runner (fragment weave).
+  const plexPath = `sediment/plex-${today}.md`;
+  const existingPlex = await readFile(plexPath, token);
+  const plexHeader = `# Plex — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
+  await writeFile(plexPath, plexHeader + dreamOutput, token, `plex ${mode} sediment ${today}`, existingPlex?.sha);
 
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
