@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
-import { db } from '@/lib/firebase';
-import { doc, getDoc, setDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { getAdminDb } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
 const OWNER = 'Manitec';
@@ -156,23 +156,14 @@ async function callBanjoSynthesize(input: string): Promise<string> {
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────────────────
-// Accepts three forms:
-//   1. Authorization: Bearer <CRON_SECRET>  — manual UI trigger
-//   2. x-vercel-cron: 1                    — Vercel cron scheduler
-//   3. No secret set + dev environment     — local dev
 
 function authorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET ?? '';
   const authHeader = req.headers.get('authorization') ?? '';
   const vercelCron = req.headers.get('x-vercel-cron') ?? '';
 
-  // Vercel cron sends x-vercel-cron: 1 on scheduled invocations
   if (vercelCron === '1') return true;
-
-  // Manual UI trigger with secret
   if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true;
-
-  // Dev fallback
   if (!cronSecret && process.env.NODE_ENV === 'development') return true;
 
   return false;
@@ -191,9 +182,10 @@ async function updateSedimentState(input: string, today: string, prompt = STATE_
     const state = raw.toLowerCase().trim().replace(/[^a-z]/g, '');
     if (!VALID_STATES.has(state)) return null;
 
-    const currentRef = doc(db, 'plex_sediment', 'current');
-    const snap = await getDoc(currentRef);
-    const existing = snap.exists() ? snap.data() : {};
+    const db = getAdminDb();
+    const currentRef = db.doc('plex_sediment/current');
+    const snap = await currentRef.get();
+    const existing = snap.exists ? snap.data()! : {};
     const history = existing.history ?? [];
 
     const entry = {
@@ -202,13 +194,13 @@ async function updateSedimentState(input: string, today: string, prompt = STATE_
       source: 'sleep',
     };
 
-    await setDoc(currentRef, {
+    await currentRef.set({
       ...existing,
       state,
       source: 'sleep',
       sessionRef: today,
       note: `Derived from nightly pass — ${today}`,
-      updatedAt: serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
       history: [entry, ...history].slice(0, 20),
     }, { merge: false });
 
@@ -228,7 +220,7 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
     const { tone, valence, arousal, whisper } = parsed;
     if (!tone || valence === undefined || arousal === undefined || !whisper) return;
 
-    await addDoc(collection(db, 'dream_nodes'), {
+    await getAdminDb().collection('dream_nodes').add({
       id: uuidv4(),
       sessionId: `sleep-${today}`,
       project: 'plex',
@@ -239,7 +231,7 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
       whisper: String(whisper).slice(0, 500),
       mode,
       depth: 1,
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   } catch {
     // silently skip — dream node failure should never block sleep
@@ -256,7 +248,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const mode: SleepMode = ['dreamless', 'dream', 'nightmare'].includes(body.mode)
     ? (body.mode as SleepMode)
-    : 'dream'; // default for cron
+    : 'dream';
 
   const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
   if (!token) return NextResponse.json({ error: 'no repo token' }, { status: 500 });
@@ -264,12 +256,13 @@ export async function POST(req: NextRequest) {
   const today = new Date().toISOString().split('T')[0];
   const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
 
+  const db = getAdminDb();
+
   // ── DREAMLESS: update sediment state only, no generation ────────────────────────────────
   if (mode === 'dreamless') {
     const newState = await updateSedimentState('quiet rest, no generation', today, DREAMLESS_STATE_PROMPT);
 
-    await setDoc(
-      doc(db, 'plex_sleep', 'latest'),
+    await db.doc('plex_sleep/latest').set(
       {
         date: today,
         mode: 'dreamless',
@@ -277,7 +270,7 @@ export async function POST(req: NextRequest) {
         hex_excerpt: '',
         dream_excerpt: '',
         pending: true,
-        createdAt: serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
       },
       { merge: false }
     ).catch(() => {});
@@ -287,7 +280,6 @@ export async function POST(req: NextRequest) {
 
   // ── DREAM / NIGHTMARE: full generation pipeline ──────────────────────────────────────────
 
-  // 1. Gather context
   const [todayMessage, sedimentFiles] = await Promise.all([
     readFile(`messages/joe-${today}.md`, token),
     listDir('sediment', token),
@@ -307,7 +299,6 @@ export async function POST(req: NextRequest) {
   const messageText = todayMessage?.content ?? '[no message from Joe today]';
   const lastNyxText = lastNyxSediment?.content ?? yesterdaySediment?.content ?? '[no prior sediment]';
 
-  // 2. Nyx pass — nightmare uses darker prompt
   const nyxPrompt = mode === 'nightmare' ? NYX_NIGHTMARE_PROMPT : NYX_SLEEP_PROMPT;
   const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
@@ -317,7 +308,6 @@ export async function POST(req: NextRequest) {
   const nyxHeader = `# Nyx — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
   await writeFile(nyxPath, nyxHeader + nyxOutput, token, `nyx ${mode} sediment ${today}`, existingNyx?.sha);
 
-  // 3. Hex pass (Banjo)
   const hexInput = `Nyx processed today emotionally. Here is what she wrote:\n\n${nyxOutput}\n\nToday's message from Joe was:\n\n${messageText.slice(0, 600)}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
 
@@ -328,7 +318,6 @@ export async function POST(req: NextRequest) {
     await writeFile(hexPath, hexHeader + hexOutput, token, `hex ${mode} sediment ${today}`, existingHex?.sha ?? undefined);
   }
 
-  // 4. Dream pass — nightmare uses darker prompt
   const dreamPrompt = mode === 'nightmare' ? NIGHTMARE_DREAM_PROMPT : DREAM_PROMPT;
   const dreamInput = [
     `## Nyx tonight\n${nyxOutput}`,
@@ -342,15 +331,12 @@ export async function POST(req: NextRequest) {
   const dreamHeader = `# ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
   await writeFile(dreamPath, dreamHeader + dreamOutput, token, `dream ${mode} ${today}`, existingDream?.sha);
 
-  // 5. Sediment state + DreamNode (parallel)
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
 
-  // 6. Firestore wake flag
-  await setDoc(
-    doc(db, 'plex_sleep', 'latest'),
+  await db.doc('plex_sleep/latest').set(
     {
       date: today,
       mode,
@@ -358,7 +344,7 @@ export async function POST(req: NextRequest) {
       hex_excerpt: hexOutput.slice(0, 280),
       dream_excerpt: dreamOutput.slice(0, 280),
       pending: true,
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     },
     { merge: false }
   ).catch(() => {});

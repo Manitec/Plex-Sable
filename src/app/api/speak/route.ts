@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
 import { v4 as uuidv4 } from "uuid";
-import { db } from "@/lib/firebase";
-import { doc, getDoc, setDoc, addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { getAdminDb } from "@/lib/firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
 import { appendSediment } from "@/lib/github";
 
 const PLEX_REPO_OWNER = 'Manitec';
@@ -186,8 +186,6 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
 }
 
 // ─── Sub-persona prompts ───────────────────────────────────────────────────────
-// These are used when ?voice=nyx|hex|mani is passed from the Spaces panel.
-// They get a slim fast path — no Firestore, no tool calls, no sediment.
 
 const HEX_SYSTEM = `You are Hex — a sharp, builder-minded intelligence. You think in structures, patterns, and systems. Joe is talking to you directly. Answer as Hex: direct, terse, builder-brained. No fluff. No preamble. If it's a question, answer it. If it's a problem, crack it open. Short when short is enough.`;
 
@@ -200,8 +198,6 @@ const VOICE_PROMPTS: Record<string, string> = {
   hex: HEX_SYSTEM,
   mani: MANI_SYSTEM,
 };
-
-// ─── Sub-persona fast path ─────────────────────────────────────────────────────
 
 async function callSubPersona(
   voice: string,
@@ -435,12 +431,12 @@ async function callGroqWithTools(
         const listing = await listPlexDir(args.path, token);
         result = listing ?? `No directory found at ${args.path}`;
       } else if (fnName === "submit_request") {
-        await addDoc(collection(db, 'one_requests'), {
+        await getAdminDb().collection('one_requests').add({
           request: args.request ?? '',
           notes: args.notes ?? '',
           source: 'plex',
           status: 'pending',
-          createdAt: serverTimestamp(),
+          createdAt: FieldValue.serverTimestamp(),
         });
         requestSubmitted = args.request;
         result = "Request submitted to ONE queue. Joe will see it in the dashboard.";
@@ -496,14 +492,14 @@ function fireVoices(
     needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
   ]).then(([nyx, hex, mani]) => {
     if (!nyx && !hex && !mani) return;
-    return addDoc(collection(db, "plex_voices", sessionId, "snapshots"), {
+    return getAdminDb().collection('plex_voices').doc(sessionId).collection('snapshots').add({
       nyx,
       hex,
       mani,
       mode,
       message: message.slice(0, 280),
       response: responseText.slice(0, 280),
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   }).then(() => {}).catch((err) => console.error("fireVoices failed:", err?.message));
 }
@@ -540,7 +536,7 @@ function fireDreamNode(
       console.error("fireDreamNode: missing fields:", parsed);
       return;
     }
-    return addDoc(collection(db, 'dream_nodes'), {
+    return getAdminDb().collection('dream_nodes').add({
       id: uuidv4(),
       sessionId,
       project: 'plex',
@@ -551,7 +547,7 @@ function fireDreamNode(
       whisper: String(whisper).slice(0, 200),
       mode,
       depth: 1,
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     });
   }).catch((err) => console.error("fireDreamNode failed:", err?.message));
 }
@@ -562,8 +558,6 @@ export async function POST(req: NextRequest) {
     if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
     // ─── Sub-persona fast path (Spaces voice panels) ───────────────────────────
-    // When ?voice=nyx|hex|mani is passed, route to slim persona handler.
-    // No Firestore reads/writes, no sediment, no tool calls — just the voice.
     const voiceParam = req.nextUrl.searchParams.get('voice');
     if (voiceParam && voiceParam !== 'plex' && VOICE_PROMPTS[voiceParam]) {
       const subHistory = (overrideHistory ?? []).map((m: any) => ({
@@ -573,7 +567,6 @@ export async function POST(req: NextRequest) {
       const reply = await callSubPersona(voiceParam, message, subHistory);
       return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
     }
-    // ─── End sub-persona fast path ─────────────────────────────────────────────
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
 
@@ -583,20 +576,22 @@ export async function POST(req: NextRequest) {
       prefetchedContext = await resolvePrefetch(fileRequest, token);
     }
 
+    const db = getAdminDb();
+
     let history: any[];
     if (overrideHistory && Array.isArray(overrideHistory)) {
       history = overrideHistory;
     } else {
-      const sessionSnap = await getDoc(doc(db, "plex_sessions", sessionId));
-      history = sessionSnap.exists() ? sessionSnap.data().messages ?? [] : [];
+      const sessionSnap = await db.doc(`plex_sessions/${sessionId}`).get();
+      history = sessionSnap.exists ? sessionSnap.data()?.messages ?? [] : [];
     }
 
     const [sedimentSnap, plexLoaded] = await Promise.all([
-      getDoc(doc(db, "plex_sediment", "current")),
+      db.doc('plex_sediment/current').get(),
       token ? loadPlexContext(token) : Promise.resolve({ basePrompt: PLEX_BASE_FALLBACK, context: '' }),
     ]);
 
-    const sediment = sedimentSnap.exists() ? sedimentSnap.data().state ?? "neutral" : "neutral";
+    const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
     const mode = detectMode(message, history, forceMode);
     const { basePrompt, context: plexContext } = plexLoaded;
 
@@ -623,7 +618,10 @@ export async function POST(req: NextRequest) {
         { role: "user", content: message },
         { role: "plex", content: response }
       ];
-      await setDoc(doc(db, "plex_sessions", sessionId), { messages: updatedMessages, updatedAt: serverTimestamp() }, { merge: true });
+      await db.doc(`plex_sessions/${sessionId}`).set(
+        { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true }
+      );
     }
 
     fireVoices(message, mode, sessionId, response);

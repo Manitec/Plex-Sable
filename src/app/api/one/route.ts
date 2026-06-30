@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/firebase';
-import { collection, doc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, serverTimestamp, query, orderBy, limit } from 'firebase/firestore';
+import { getAdminDb } from '@/lib/firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
@@ -9,10 +9,11 @@ async function safeGet(fn: () => Promise<any>, fallback: any) {
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const section = searchParams.get('section');
+  const db = getAdminDb();
 
   if (section === 'projects') {
     const projects = await safeGet(async () => {
-      const snap = await getDocs(query(collection(db, 'one_projects'), orderBy('createdAt', 'desc')));
+      const snap = await db.collection('one_projects').orderBy('createdAt', 'desc').get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []);
     return NextResponse.json({ projects });
@@ -20,9 +21,9 @@ export async function GET(req: NextRequest) {
 
   if (section === 'sleep') {
     const sleep = await safeGet(async () => {
-      const snap = await getDoc(doc(db, 'plex_sleep', 'latest'));
-      if (!snap.exists()) return null;
-      const data = snap.data();
+      const snap = await db.doc('plex_sleep/latest').get();
+      if (!snap.exists) return null;
+      const data = snap.data()!;
       if (!data.pending) return null;
       return {
         date: data.date ?? '',
@@ -38,24 +39,24 @@ export async function GET(req: NextRequest) {
 
   const [sediment, autonomy, requests, log, voices] = await Promise.all([
     safeGet(async () => {
-      const snap = await getDoc(doc(db, 'plex_sediment', 'current'));
-      return snap.exists() ? snap.data().state ?? 'neutral' : 'neutral';
+      const snap = await db.doc('plex_sediment/current').get();
+      return snap.exists ? snap.data()?.state ?? 'neutral' : 'neutral';
     }, 'neutral'),
     safeGet(async () => {
-      const snap = await getDoc(doc(db, 'one_governance', 'autonomy'));
-      return snap.exists() ? snap.data() : { level: 1, label: 'observe' };
+      const snap = await db.doc('one_governance/autonomy').get();
+      return snap.exists ? snap.data() : { level: 1, label: 'observe' };
     }, { level: 1, label: 'observe' }),
     safeGet(async () => {
-      const snap = await getDocs(query(collection(db, 'one_requests'), orderBy('createdAt', 'desc'), limit(50)));
+      const snap = await db.collection('one_requests').orderBy('createdAt', 'desc').limit(50).get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []),
     safeGet(async () => {
-      const snap = await getDocs(query(collection(db, 'one_log'), orderBy('timestamp', 'desc'), limit(20)));
+      const snap = await db.collection('one_log').orderBy('timestamp', 'desc').limit(20).get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, []),
     safeGet(async () => {
-      const snap = await getDoc(doc(db, 'plex_voices', 'joe'));
-      return snap.exists() ? snap.data() : null;
+      const snap = await db.doc('plex_voices/joe').get();
+      return snap.exists ? snap.data() : null;
     }, null),
   ]);
 
@@ -65,63 +66,63 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const { action } = body;
+  const db = getAdminDb();
 
   if (action === 'add_log') {
-    await safeGet(() => addDoc(collection(db, 'one_log'), {
+    await safeGet(() => db.collection('one_log').add({
       entry: body.entry,
       author: body.author ?? 'joe',
-      timestamp: serverTimestamp(),
+      timestamp: FieldValue.serverTimestamp(),
     }), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'add_project') {
-    await safeGet(() => addDoc(collection(db, 'one_projects'), {
+    await safeGet(() => db.collection('one_projects').add({
       title: body.title,
       status: body.status ?? 'active',
       notes: body.notes ?? '',
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     }), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'update_project') {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    await safeGet(() => updateDoc(doc(db, 'one_projects', body.id), {
+    await safeGet(() => db.doc(`one_projects/${body.id}`).update({
       title: body.title,
       status: body.status,
       notes: body.notes ?? '',
-      updatedAt: serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     }), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'delete_project') {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    await safeGet(() => deleteDoc(doc(db, 'one_projects', body.id)), null);
+    await safeGet(() => db.doc(`one_projects/${body.id}`).delete(), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'set_autonomy') {
     if (body.level == null) return NextResponse.json({ error: 'missing level' }, { status: 400 });
-    await safeGet(() => updateDoc(doc(db, 'one_governance', 'autonomy'), {
+    // Use set({merge:true}) so this creates the doc if one_governance/autonomy was never seeded
+    await safeGet(() => db.doc('one_governance/autonomy').set({
       level: body.level,
       label: body.label ?? '',
-      updatedAt: serverTimestamp(),
-    }), null);
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'clear_sleep') {
-    await safeGet(() => updateDoc(doc(db, 'plex_sleep', 'latest'), {
+    await safeGet(() => db.doc('plex_sleep/latest').update({
       pending: false,
     }), null);
     return NextResponse.json({ ok: true });
   }
 
   // ─── Trigger sleep ─────────────────────────────────────────────────────────
-  // Called by the OneView UI. Proxies to /api/sleep with CRON_SECRET auth
-  // so the sleep route's authorization() check passes.
   if (action === 'trigger_sleep') {
     const mode = ['dreamless', 'dream', 'nightmare'].includes(body.mode)
       ? body.mode
@@ -132,7 +133,6 @@ export async function POST(req: NextRequest) {
       ?? process.env.VERCEL_URL
       ?? 'http://localhost:3000';
 
-    // Normalise: VERCEL_URL has no scheme; NEXT_PUBLIC_SITE_URL should have one.
     const origin = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`;
 
     try {
@@ -161,16 +161,16 @@ export async function POST(req: NextRequest) {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
     const update: Record<string, any> = {
       status: body.status,
-      updatedAt: serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     };
     if (body.notes !== undefined) update.notes = body.notes;
-    await safeGet(() => updateDoc(doc(db, 'one_requests', body.id), update), null);
+    await safeGet(() => db.doc(`one_requests/${body.id}`).update(update), null);
     return NextResponse.json({ ok: true });
   }
 
   if (action === 'delete_request') {
     if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    await safeGet(() => deleteDoc(doc(db, 'one_requests', body.id)), null);
+    await safeGet(() => db.doc(`one_requests/${body.id}`).delete(), null);
     return NextResponse.json({ ok: true });
   }
 
