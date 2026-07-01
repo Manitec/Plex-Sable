@@ -14,6 +14,67 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
+// ── SYN-E: question detection ─────────────────────────────────────────────────
+// Returns true if the prompt looks like a genuine question Plex should search for.
+// Avoids triggering on action intents ("click", "fill", "scroll") or
+// page-read requests ("what's on this page", "summarise this").
+function isQuestion(prompt: string | null): boolean {
+  if (!prompt || prompt.trim().length < 8) return false;
+  const p = prompt.trim().toLowerCase();
+  // Explicit question mark
+  if (p.endsWith("?")) return true;
+  // Question word openers
+  if (/^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/.test(p)) return true;
+  return false;
+}
+
+// ── SYN-E: call /api/search (SRC) then /api/answer in electron mode ────────────
+async function runSynE(
+  question: string,
+  pageContext: string,
+  baseUrl: string
+): Promise<string> {
+  try {
+    // 1. SRC — web search
+    const srcRes = await fetch(`${baseUrl}/api/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, maxResults: 5 }),
+    });
+    const srcData = srcRes.ok ? await srcRes.json() : null;
+    const searchResults: string = srcData?.results
+      ? srcData.results
+          .slice(0, 5)
+          .map((r: any, i: number) => `[${i + 1}] ${r.title}\n${r.snippet ?? ""}\n${r.url ?? ""}`)
+          .join("\n\n")
+      : "(no search results)";
+
+    // 2. SYN-E — answer synthesis with electron context
+    const synRes = await fetch(`${baseUrl}/api/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        question,
+        searchResults,
+        pageContext,
+        source: "electron",
+      }),
+    });
+    const synData = synRes.ok ? await synRes.json() : null;
+    return synData?.answer ?? "(no answer)";
+  } catch (e: any) {
+    console.error("runSynE failed:", e?.message);
+    return "(search failed)";
+  }
+}
+
+// Derive the base URL for internal calls (works both locally and on Vercel)
+function getBaseUrl(req: NextRequest): string {
+  const host = req.headers.get("host") ?? "localhost:3000";
+  const proto = host.startsWith("localhost") ? "http" : "https";
+  return `${proto}://${host}`;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const contentType = req.headers.get("content-type") ?? "";
@@ -51,8 +112,10 @@ export async function POST(req: NextRequest) {
          capabilities = [], interactiveElements = [] } = body);
     }
 
-    const hasImage = !!(imageUrl || imageFile);
-    const canAct   = Array.isArray(capabilities) && capabilities.length > 0;
+    const hasImage  = !!(imageUrl || imageFile);
+    const canAct    = Array.isArray(capabilities) && capabilities.length > 0;
+    const fromPE    = source === "plex-electron";
+    const shouldSearch = fromPE && isQuestion(prompt);
 
     if (!hasImage && !url) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
@@ -64,6 +127,19 @@ export async function POST(req: NextRequest) {
     const groq    = makeGroq();
     let response  = "";
     let actions: object[] = [];
+    let synEAnswer: string | null = null;
+
+    // ── SYN-E PATH — PE question detected, run search synthesis in parallel ────
+    // Fires before the main observe path so both can run concurrently.
+    let synEPromise: Promise<string> | null = null;
+    if (shouldSearch && prompt) {
+      const pageContext = [
+        title   ? `Page: ${title}` : "",
+        url     ? `URL: ${url}` : "",
+        pageText ? `Page excerpt:\n${pageText.slice(0, 800)}` : "",
+      ].filter(Boolean).join("\n");
+      synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
+    }
 
     // ── VISION PATH ───────────────────────────────────────────────────────────────────
     if (hasImage) {
@@ -151,6 +227,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // ── Resolve SYN-E if it was kicked off ────────────────────────────────────
+    if (synEPromise) {
+      synEAnswer = await synEPromise;
+      // Prepend the search synthesis to the observe response so PE sees it cleanly
+      if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
+        response = synEAnswer + (response ? `\n\n---\n${response}` : "");
+      }
+    }
+
     // ── LOG ────────────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
@@ -162,6 +247,7 @@ export async function POST(req: NextRequest) {
       hasImage,
       source,
       sessionId,
+      synE:         synEAnswer ?? null,
       createdAt: FieldValue.serverTimestamp(),
       response:  silent ? null : response,
       actions:   actions.length ? actions : null,
@@ -173,16 +259,18 @@ export async function POST(req: NextRequest) {
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
         : actions.length
           ? `Joe told Plex to act on "${title ?? url}": ${prompt?.slice(0, 80)}`
-          : selectedText
-            ? `Joe was reading "${title ?? url}" and highlighted: "${selectedText.slice(0, 120)}"`
-            : `Joe was looking at: ${title ?? url} (${url})`;
+          : shouldSearch
+            ? `Joe asked Plex (browsing): "${prompt?.slice(0, 120)}" — Plex searched and answered`
+            : selectedText
+              ? `Joe was reading "${title ?? url}" and highlighted: "${selectedText.slice(0, 120)}"`
+              : `Joe was looking at: ${title ?? url} (${url})`;
 
       appendSediment({ mode: "observe", state: "present", note: sedimentNote })
         .catch((err: any) => console.error("observe appendSediment failed:", err?.message));
     }
 
     return NextResponse.json(
-      { observed: true, id: obsRef.id, response: silent ? null : response, actions },
+      { observed: true, id: obsRef.id, response: silent ? null : response, actions, synE: synEAnswer ?? null },
       { headers: CORS }
     );
 
