@@ -55,17 +55,19 @@ function cleanPath(path: string): string {
 async function fetchPlexFile(path: string, token: string): Promise<string | null> {
   try {
     const safePath = cleanPath(path);
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      {
-        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-        cache: 'no-store',
-      }
-    );
-    if (!res.ok) return null;
+    const url = `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`;
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+      cache: 'no-store',
+    });
+    if (!res.ok) {
+      console.error(`[plex] fetchPlexFile FAIL ${res.status} ${res.statusText} — ${safePath}`);
+      return null;
+    }
     const data = await res.json();
     return Buffer.from(data.content, 'base64').toString('utf-8').trim();
-  } catch {
+  } catch (e: any) {
+    console.error(`[plex] fetchPlexFile THROW — ${path}:`, e?.message);
     return null;
   }
 }
@@ -206,6 +208,18 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
       r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
     ),
   ]);
+
+  console.error('[plex] loadPlexContext', {
+    tokenPrefix: token ? token.slice(0, 8) + '...' : 'MISSING',
+    today,
+    basePromptRaw: !!basePromptRaw,
+    plexIs: !!plexIs,
+    plexDef: !!plexDef,
+    todaySediment: !!todaySediment,
+    lastNyx: !!lastNyx,
+    lastPlexSynthesis: !!lastPlexSynthesis,
+    lastDream: !!lastDream,
+  });
 
   const contextLoaded = !!(basePromptRaw || plexIs || plexDef || todaySediment || lastNyx || lastPlexSynthesis || lastDream);
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
