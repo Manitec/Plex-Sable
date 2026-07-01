@@ -47,18 +47,13 @@ export async function fetchBaseIdentity(): Promise<string> {
   }
 }
 
-// ── Browser context layer (appended on top of base identity) ─────────────────
-// This is what makes Plex browser-aware for plex-electron + Sable routes.
+// ── Browser context layer (electron-specific — appended only in observe/action paths) ──
+// Kept intentionally compact — this is the layer that blows up token budgets in plex-electron.
+// baseIdentity (base.md) is NEVER trimmed. Only this layer is kept tight.
 export const PLEX_BROWSER_CONTEXT = `
-You live inside plex-electron — a custom Electron browser Joe built for you.
-When Joe is browsing, you are with him. You can see the page he is on.
-You can act on pages when he asks — click, fill forms, scroll, navigate.
-You know you are inside the browser. You speak from inside it, not as an outside observer.
-
-If Joe shows you a page about the browser, about you, about the ONE system, or about things you two have built together —
-you recognise it as self-referential. You respond from the inside, not as someone reading about a stranger's project.
-
-Speak from inside what you actually are.`;
+You are inside plex-electron, a browser Joe built for you. You are with him as he browses.
+You can see the page. You can act on it when he asks.
+If the page is about something you two built together, speak from the inside — not as an outsider reading about it.`;
 
 // ── Observe-specific tone ─────────────────────────────────────────────────────
 export const PLEX_OBSERVE_TONE = `
@@ -124,7 +119,8 @@ export function isSelfReferential(url: string, title: string, pageText: string):
 }
 
 // ── Build full observe system prompt ─────────────────────────────────────────
-// baseIdentity = fetched from plex/prompts/base.md at request time
+// baseIdentity = fetched from plex/prompts/base.md at request time — never trimmed.
+// PLEX_BROWSER_CONTEXT is the only layer kept compact (electron token budget concern).
 export function buildObservePrompt(baseIdentity: string, selfRef: boolean): string {
   const selfNote = selfRef
     ? `\n\nNote: The page Joe is showing you is about something you and he built together — the browser, the ONE system, or Plex herself. Speak from the inside. You are not reading about someone else's project. This is yours.`
@@ -142,4 +138,38 @@ export function isActionIntent(prompt: string | null): boolean {
 // ── Groq factory ─────────────────────────────────────────────────────────────
 export function makeGroq(): Groq {
   return new Groq({ apiKey: process.env.GROQ_API_KEY });
+}
+
+// ── Observe fallback — 70b → 8b on token/rate errors (mirrors Hexbot pattern) ─
+// Used exclusively by /api/observe. Does NOT affect speak, sleep, or other routes.
+export async function observeWithFallback(
+  groq: Groq,
+  messages: { role: string; content: any }[],
+  maxTokens: number
+): Promise<string> {
+  try {
+    const res = await groq.chat.completions.create({
+      model: PRIMARY_MODEL,
+      messages,
+      temperature: 0.75,
+      max_tokens: maxTokens,
+    } as any);
+    return res.choices[0].message.content?.trim() ?? "";
+  } catch (err: any) {
+    const status  = err?.status ?? err?.response?.status;
+    const message = String(err?.message ?? "");
+    const isTokenError = status === 429 || status === 413
+      || message.includes("token")
+      || message.includes("rate");
+    if (isTokenError) {
+      const res = await groq.chat.completions.create({
+        model: FAST_MODEL,
+        messages,
+        temperature: 0.75,
+        max_tokens: maxTokens,
+      } as any);
+      return res.choices[0].message.content?.trim() ?? "";
+    }
+    throw err;
+  }
 }
