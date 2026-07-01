@@ -55,19 +55,17 @@ function cleanPath(path: string): string {
 async function fetchPlexFile(path: string, token: string): Promise<string | null> {
   try {
     const safePath = cleanPath(path);
-    const url = `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`;
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      console.error(`[plex] fetchPlexFile FAIL ${res.status} ${res.statusText} — ${safePath}`);
-      return null;
-    }
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
+    );
+    if (!res.ok) return null;
     const data = await res.json();
     return Buffer.from(data.content, 'base64').toString('utf-8').trim();
-  } catch (e: any) {
-    console.error(`[plex] fetchPlexFile THROW — ${path}:`, e?.message);
+  } catch {
     return null;
   }
 }
@@ -166,7 +164,9 @@ async function fetchLastNyxSediment(token: string): Promise<string | null> {
   }
 }
 
-async function fetchLastPlexSediment(token: string): Promise<string | null> {
+// Grabs Plex's most recent sediment from a prior day (bare YYYY-MM-DD.md files).
+// Skips today so it reads as "what you wrote before" rather than the live entry.
+async function fetchLastPlexSediment(token: string, skipDate: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
@@ -178,13 +178,15 @@ async function fetchLastPlexSediment(token: string): Promise<string | null> {
     if (!res.ok) return null;
     const data = await res.json();
     if (!Array.isArray(data)) return null;
-    const plexFiles = data
-      .filter((f: any) => f.type === 'file' && f.name.startsWith('plex-'))
+    // Bare date files: YYYY-MM-DD.md — exclude today and README
+    const dateFileRe = /^\d{4}-\d{2}-\d{2}\.md$/;
+    const priorFiles = data
+      .filter((f: any) => f.type === 'file' && dateFileRe.test(f.name) && f.name !== `${skipDate}.md`)
       .map((f: any) => f.name)
       .sort()
       .reverse();
-    if (plexFiles.length === 0) return null;
-    return fetchPlexFile(`sediment/${plexFiles[0]}`, token);
+    if (priorFiles.length === 0) return null;
+    return fetchPlexFile(`sediment/${priorFiles[0]}`, token);
   } catch {
     return null;
   }
@@ -203,23 +205,11 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     fetchPlexFile('plex-def.txt', token),
     fetchPlexFile(`sediment/${today}.md`, token),
     fetchLastNyxSediment(token),
-    fetchLastPlexSediment(token),
+    fetchLastPlexSediment(token, today),
     fetchPlexFile(`dreams/${today}.md`, token).then(r =>
       r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
     ),
   ]);
-
-  console.error('[plex] loadPlexContext', {
-    tokenPrefix: token ? token.slice(0, 8) + '...' : 'MISSING',
-    today,
-    basePromptRaw: !!basePromptRaw,
-    plexIs: !!plexIs,
-    plexDef: !!plexDef,
-    todaySediment: !!todaySediment,
-    lastNyx: !!lastNyx,
-    lastPlexSynthesis: !!lastPlexSynthesis,
-    lastDream: !!lastDream,
-  });
 
   const contextLoaded = !!(basePromptRaw || plexIs || plexDef || todaySediment || lastNyx || lastPlexSynthesis || lastDream);
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
