@@ -106,7 +106,6 @@ export async function POST(req: NextRequest) {
 
   if (action === 'set_autonomy') {
     if (body.level == null) return NextResponse.json({ error: 'missing level' }, { status: 400 });
-    // Use set({merge:true}) so this creates the doc if one_governance/autonomy was never seeded
     await safeGet(() => db.doc('one_governance/autonomy').set({
       level: body.level,
       label: body.label ?? '',
@@ -142,7 +141,9 @@ export async function POST(req: NextRequest) {
           'Content-Type': 'application/json',
           ...(cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {}),
         },
-        body: JSON.stringify({ mode }),
+        // source:'manual' ensures willDream() applies manual rules:
+        // dreamless → never, nightmare → 21-32%, dream → always
+        body: JSON.stringify({ mode, source: 'manual' }),
       });
 
       if (!sleepRes.ok) {
