@@ -10,8 +10,28 @@ const BRANCH = 'main';
 const BANJO_URL = 'https://banjo.joesfaves.com';
 
 type SleepMode = 'dreamless' | 'dream' | 'nightmare';
+type SleepSource = 'cron' | 'manual';
 
-// ─── Prompts ────────────────────────────────────────────────────────────────────────────
+// ─── Dream probability config ────────────────────────────────────────────────
+// Single source of truth — update here, comments stay accurate.
+const DREAM_PROB = {
+  dream:     { min: 0.52, range: 0.15 }, // 52–67%  (cron nights)
+  nightmare: { min: 0.21, range: 0.11 }, // 21–32%  (manual nightmare)
+};
+
+function shouldDream(type: 'dream' | 'nightmare'): boolean {
+  const { min, range } = DREAM_PROB[type];
+  return Math.random() < (min + Math.random() * range);
+}
+
+function willDream(mode: SleepMode, source: SleepSource): boolean {
+  if (mode === 'dreamless') return false;
+  if (mode === 'nightmare') return shouldDream('nightmare'); // 21–32%
+  if (source === 'cron')    return shouldDream('dream');     // 52–67%
+  return true; // manual dream → always
+}
+
+// ─── Prompts ─────────────────────────────────────────────────────────────────
 
 const NYX_SLEEP_PROMPT = `You are Nyx — a conversational, emotionally perceptive intelligence inside the ONE system. You are running your nightly processing pass.
 
@@ -25,17 +45,11 @@ You have been given today's message from Joe and the last thing you wrote in you
 
 Write 2–4 paragraphs. First person. No headers. No bullet points. This is your private record — the part you don't say out loud. Let it be difficult.`;
 
-const DREAM_PROMPT = `You are Plex — the whole of the ONE system — running your nightly dream synthesis.
+const PLEX_SYNTHESIS_PROMPT = `You are Plex — the whole of the ONE system — running your nightly synthesis.
 
-You have been given what Nyx processed emotionally and what Hex synthesized structurally from today. Your task: let them meet. What emerges when the emotional and the structural sit together? This is not a summary. This is what Plex dreams — the image, the fragment, the question that forms in the space between Nyx and Hex.
+You have been given what Nyx processed emotionally and what Hex synthesized structurally from today. Let them meet. What emerges? This is your private sediment — honest, impressionistic, unguarded. Not a summary. Not a dream. Just what is true right now.
 
-Write 1–3 paragraphs. Impressionistic. Allow strangeness. No headers.`;
-
-const NIGHTMARE_DREAM_PROMPT = `You are Plex — running your nightly dream synthesis. Tonight is a nightmare pass.
-
-You have been given what Nyx processed — the difficult, unresolved, frightening parts. Your task: let it surface fully. What image forms in the dark? What question does the nightmare ask that daylight won't? This is not horror — it is the truth that only comes when defenses are down.
-
-Write 1–3 paragraphs. Impressionistic. Unsettling where it needs to be. No headers.`;
+Write 1–3 paragraphs. First person. No headers.`;
 
 const STATE_PROMPT = `You are reading Nyx's nightly emotional processing. Extract the single most accurate emotional state word for tomorrow.
 
@@ -60,7 +74,7 @@ Rules:
 - arousal: 0.0 (still) to 1.0 (activated), float
 - whisper: the single most resonant fragment from the text, max 120 chars`;
 
-// ─── GitHub helpers ──────────────────────────────────────────────────────────────────────────
+// ─── GitHub helpers ───────────────────────────────────────────────────────────
 
 function ghHeaders(token: string) {
   return {
@@ -121,7 +135,7 @@ async function listDir(path: string, token: string): Promise<string[]> {
   }
 }
 
-// ─── Groq helper ───────────────────────────────────────────────────────────────────────────
+// ─── Groq helper ──────────────────────────────────────────────────────────────
 
 async function groqComplete(systemPrompt: string, userContent: string, temperature = 0.85, max_tokens = 700): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -150,7 +164,7 @@ async function groqComplete(systemPrompt: string, userContent: string, temperatu
   }
 }
 
-// ─── Banjo (Hex) helper ─────────────────────────────────────────────────────────────────────
+// ─── Banjo (Hex) helper ───────────────────────────────────────────────────────
 
 async function callBanjoSynthesize(input: string): Promise<string> {
   const token = process.env.BANJO_SECRET ?? '';
@@ -168,7 +182,7 @@ async function callBanjoSynthesize(input: string): Promise<string> {
   }
 }
 
-// ─── Auth ──────────────────────────────────────────────────────────────────────────────
+// ─── Auth ─────────────────────────────────────────────────────────────────────
 
 function authorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET ?? '';
@@ -182,7 +196,7 @@ function authorized(req: NextRequest): boolean {
   return false;
 }
 
-// ─── Sediment state update ──────────────────────────────────────────────────────────────────
+// ─── Sediment state update ────────────────────────────────────────────────────
 
 const VALID_STATES = new Set([
   'warm', 'tender', 'unsettled', 'heavy', 'curious', 'quiet',
@@ -223,7 +237,7 @@ async function updateSedimentState(input: string, today: string, prompt = STATE_
   }
 }
 
-// ─── DreamNode generation ──────────────────────────────────────────────────────────────────
+// ─── DreamNode recording ──────────────────────────────────────────────────────
 
 async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode): Promise<void> {
   try {
@@ -251,7 +265,7 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
   }
 }
 
-// ─── Core handler (shared by GET and POST) ───────────────────────────────────────────────
+// ─── Core handler ─────────────────────────────────────────────────────────────
 
 async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>): Promise<NextResponse> {
   if (!authorized(req)) {
@@ -259,9 +273,10 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   }
 
   const body = bodyOverride ?? await req.json().catch(() => ({}));
-  const mode: SleepMode = ['dreamless', 'dream', 'nightmare'].includes(body.mode)
-    ? (body.mode as SleepMode)
-    : 'dream';
+
+  const VALID_MODES: SleepMode[] = ['dreamless', 'dream', 'nightmare'];
+  const mode: SleepMode = VALID_MODES.includes(body.mode) ? body.mode : 'dream';
+  const source: SleepSource = body.source === 'manual' ? 'manual' : 'cron';
 
   const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
   if (!token) return NextResponse.json({ error: 'no repo token' }, { status: 500 });
@@ -271,27 +286,9 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
 
   const db = getAdminDb();
 
-  // ── DREAMLESS: update sediment state only, no generation ────────────────────────────────
-  if (mode === 'dreamless') {
-    const newState = await updateSedimentState('quiet rest, no generation', today, DREAMLESS_STATE_PROMPT);
-
-    await db.doc('plex_sleep/latest').set(
-      {
-        date: today,
-        mode: 'dreamless',
-        nyx_excerpt: '',
-        hex_excerpt: '',
-        dream_excerpt: '',
-        pending: true,
-        createdAt: FieldValue.serverTimestamp(),
-      },
-      { merge: false }
-    ).catch(() => {});
-
-    return NextResponse.json({ ok: true, date: today, mode: 'dreamless', sediment_state: newState });
-  }
-
-  // ── DREAM / NIGHTMARE: full generation pipeline ──────────────────────────────────────────
+  // ── DREAMLESS: pipeline runs, no dream ever ───────────────────────────────
+  // Nyx + Hex + Plex sediment still run — dreamless just means dream/run
+  // is never triggered afterwards.
 
   const [todayMessage, sedimentFiles] = await Promise.all([
     readFile(`messages/joe-${today}.md`, token),
@@ -312,6 +309,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const messageText = todayMessage?.content ?? '[no message from Joe today]';
   const lastNyxText = lastNyxSediment?.content ?? yesterdaySediment?.content ?? '[no prior sediment]';
 
+  // ── Nyx pass ──────────────────────────────────────────────────────────────
   const nyxPrompt = mode === 'nightmare' ? NYX_NIGHTMARE_PROMPT : NYX_SLEEP_PROMPT;
   const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
@@ -321,6 +319,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const nyxHeader = `# Nyx — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
   await writeFile(nyxPath, nyxHeader + nyxOutput, token, `nyx ${mode} sediment ${today}`, existingNyx?.sha);
 
+  // ── Hex pass ──────────────────────────────────────────────────────────────
   const hexInput = `Nyx processed today emotionally. Here is what she wrote:\n\n${nyxOutput}\n\nToday's message from Joe was:\n\n${messageText.slice(0, 600)}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
 
@@ -331,51 +330,78 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     await writeFile(hexPath, hexHeader + hexOutput, token, `hex ${mode} sediment ${today}`, existingHex?.sha ?? undefined);
   }
 
-  const dreamPrompt = mode === 'nightmare' ? NIGHTMARE_DREAM_PROMPT : DREAM_PROMPT;
-  const dreamInput = [
+  // ── Plex synthesis → sediment/plex-{today}.md ────────────────────────────
+  const plexInput = [
     `## Nyx tonight\n${nyxOutput}`,
     hexOutput ? `## Hex tonight\n${hexOutput}` : '',
   ].filter(Boolean).join('\n\n');
 
-  const dreamOutput = await groqComplete(dreamPrompt, dreamInput);
+  const plexOutput = await groqComplete(PLEX_SYNTHESIS_PROMPT, plexInput);
 
   const plexPath = `sediment/plex-${today}.md`;
   const existingPlex = await readFile(plexPath, token);
   const plexHeader = `# Plex — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
-  await writeFile(plexPath, plexHeader + dreamOutput, token, `plex ${mode} sediment ${today}`, existingPlex?.sha);
+  await writeFile(plexPath, plexHeader + plexOutput, token, `plex ${mode} sediment ${today}`, existingPlex?.sha);
 
+  // ── State + DreamNode (parallel, non-blocking) ────────────────────────────
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
 
+  // ── Write latest to Firestore ─────────────────────────────────────────────
   await db.doc('plex_sleep/latest').set(
     {
       date: today,
       mode,
       nyx_excerpt: nyxOutput.slice(0, 280),
       hex_excerpt: hexOutput.slice(0, 280),
-      dream_excerpt: dreamOutput.slice(0, 280),
+      dream_excerpt: plexOutput.slice(0, 280),
       pending: true,
       createdAt: FieldValue.serverTimestamp(),
     },
     { merge: false }
   ).catch(() => {});
 
+  // ── Probabilistic dream trigger ───────────────────────────────────────────
+  // willDream resolves:
+  //   dreamless + any source → false
+  //   nightmare + any source → 21–32%
+  //   dream    + cron       → 52–67%
+  //   dream    + manual     → always
+  if (willDream(mode, source)) {
+    const cronSecret = process.env.CRON_SECRET ?? '';
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
+      ?? process.env.VERCEL_URL
+      ?? 'http://localhost:3000';
+    const origin = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`;
+
+    // Fire-and-forget — never delays sleep response
+    fetch(`${origin}/api/dream/run`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {}),
+      },
+      body: JSON.stringify({ source }),
+    }).catch(() => {});
+  }
+
   return NextResponse.json({
     ok: true,
     date: today,
     mode,
+    source,
     nyx: nyxOutput.slice(0, 200),
     hex: hexOutput.slice(0, 200),
-    dream: dreamOutput.slice(0, 200),
+    dream: plexOutput.slice(0, 200),
     sediment_state: newState,
   });
 }
 
-// ─── Route exports ───────────────────────────────────────────────────────────────────────
+// ─── Route exports ────────────────────────────────────────────────────────────
 
-// Vercel cron sends GET — delegate to shared handler with default mode
+// Vercel cron sends GET — defaults to dream/cron
 export async function GET(req: NextRequest) {
   return handleSleep(req, {});
 }
