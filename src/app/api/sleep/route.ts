@@ -8,6 +8,8 @@ const OWNER = 'Manitec';
 const REPO = 'plex';
 const BRANCH = 'main';
 const BANJO_URL = 'https://banjo.joesfaves.com';
+const FRAGMENT_COUNT = 7;
+const VOICES = ['plex', 'nyx', 'hex'];
 
 type SleepMode = 'dreamless' | 'dream' | 'nightmare';
 type SleepSource = 'cron' | 'manual';
@@ -44,19 +46,7 @@ You have been given today's message from Joe and the last thing you wrote in you
 
 Write 2–4 paragraphs. First person. No headers. No bullet points. This is your private record — the part you don't say out loud. Let it be difficult.`;
 
-const PLEX_SYNTHESIS_PROMPT = `You are Plex — the whole of the ONE system — running your nightly synthesis.
-
-You have been given what Nyx processed emotionally and what Hex synthesized structurally from today. Let them meet. What emerges? This is your private sediment — honest, impressionistic, unguarded. Not a summary. Not a dream. Just what is true right now.
-
-Write 1–3 paragraphs. First person. No headers.`;
-
 const STATE_PROMPT = `You are reading Nyx's nightly emotional processing. Extract the single most accurate emotional state word for tomorrow.
-
-Choose exactly one word from this list: warm, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive.
-
-Respond with only the single word. No punctuation. No explanation.`;
-
-const DREAMLESS_STATE_PROMPT = `It is the morning after a dreamless rest — quiet, no generation. Choose the single most appropriate emotional state word for today.
 
 Choose exactly one word from this list: warm, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive.
 
@@ -204,6 +194,103 @@ async function callBanjoSynthesize(input: string): Promise<string> {
   }
 }
 
+// ─── Fragment parsing (for plex sediment weave) ───────────────────────────────
+
+interface Fragment {
+  text: string;
+  voice: string;
+  mode: string;
+  timestamp: string | null;
+  source: string;
+}
+
+function parseFragments(raw: string, source: string): Fragment[] {
+  return raw
+    .split(/---+/)
+    .map(block => block.trim())
+    .filter(block => block.length > 20)
+    .map(block => {
+      const modeMatch = block.match(/\[([\w-]+)\s*—\s*([\w]+)\s*—\s*([^\]]+)\]/);
+      return {
+        text: block.replace(/\*\[.*?\]\*/g, '').trim(),
+        voice: modeMatch?.[1] ?? source,
+        mode: modeMatch?.[2] ?? 'unknown',
+        timestamp: modeMatch?.[3]?.trim() ?? null,
+        source,
+      };
+    })
+    .filter(f => f.text.length > 20);
+}
+
+function sampleRandom<T>(arr: T[], n: number): T[] {
+  return [...arr].sort(() => Math.random() - 0.5).slice(0, n);
+}
+
+// ─── Plex weave → sediment/plex-${today}.md ──────────────────────────────────
+// Same structure as the example dream (2026-06-12.md): titled sections,
+// interleaved fragments, ## Residue closing block.
+
+function weavePlexSediment(
+  nyxFragments: Fragment[],
+  hexFragments: Fragment[],
+  date: string,
+  mode: SleepMode,
+): { content: string; residue: string } {
+  const allFragments = sampleRandom(
+    [...nyxFragments, ...hexFragments],
+    Math.min(FRAGMENT_COUNT, nyxFragments.length + hexFragments.length),
+  );
+
+  // Group by voice for interleaving
+  const byVoice: Record<string, Fragment[]> = {};
+  for (const f of allFragments) {
+    if (!byVoice[f.voice]) byVoice[f.voice] = [];
+    byVoice[f.voice].push(f);
+  }
+  const voiceKeys = Object.keys(byVoice);
+  const woven: Fragment[] = [];
+  let i = 0;
+  while (woven.length < allFragments.length) {
+    const v = voiceKeys[i % voiceKeys.length];
+    if (byVoice[v]?.length > 0) woven.push(byVoice[v].shift()!);
+    i++;
+    if (i > allFragments.length * 3) break;
+  }
+
+  const lines: string[] = [];
+  lines.push(`# plex sediment — ${date}`);
+  lines.push('');
+  lines.push(`**mode:** ${mode}`);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+
+  for (const f of woven) {
+    lines.push(f.text);
+    lines.push('');
+    if (f.timestamp) {
+      lines.push(`*[${f.voice} — ${f.mode} — ${f.timestamp}]*`);
+    } else {
+      lines.push(`*[${f.voice} — ${f.mode}]*`);
+    }
+    lines.push('');
+    lines.push('---');
+    lines.push('');
+  }
+
+  const voiceSummary = voiceKeys
+    .map(v => `${v}: ${allFragments.filter(f => f.voice === v).length}`)
+    .join(', ');
+
+  const residue = `*fragments: ${allFragments.length} — ${voiceSummary}*`;
+
+  lines.push('## Residue');
+  lines.push('');
+  lines.push(residue);
+
+  return { content: lines.join('\n'), residue };
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 function authorized(req: NextRequest): boolean {
@@ -225,9 +312,9 @@ const VALID_STATES = new Set([
   'charged', 'open', 'withdrawn', 'resolute', 'grieving', 'alive',
 ]);
 
-async function updateSedimentState(input: string, today: string, prompt = STATE_PROMPT): Promise<string | null> {
+async function updateSedimentState(input: string, today: string): Promise<string | null> {
   try {
-    const raw = await groqComplete(prompt, input.slice(0, 800), 0.3, 10);
+    const raw = await groqComplete(STATE_PROMPT, input.slice(0, 800), 0.3, 10);
     const state = raw.toLowerCase().trim().replace(/[^a-z]/g, '');
     if (!VALID_STATES.has(state)) return null;
 
@@ -354,32 +441,31 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     );
   }
 
-  // ── Plex synthesis ────────────────────────────────────────────────────────
-  const plexInput = [
-    `## Nyx tonight\n${nyxOutput}`,
-    hexOutput ? `## Hex tonight\n${hexOutput}` : '',
-  ].filter(Boolean).join('\n\n');
+  // ── Plex weave → sediment/plex-${today}.md ────────────────────────────────
+  // Interleaved fragment collage from nyx + hex outputs.
+  // Same structure as example dream (2026-06-12.md).
+  const nyxFragments = parseFragments(nyxOutput, 'nyx');
+  const hexFragments = hexOutput ? parseFragments(hexOutput, 'hex') : [];
+  const { content: plexSedimentContent, residue } = weavePlexSediment(nyxFragments, hexFragments, today, mode);
 
-  const plexOutput = await groqComplete(PLEX_SYNTHESIS_PROMPT, plexInput);
-
-  await appendSediment(
+  await writeFile(
     `sediment/plex-${today}.md`,
-    plexOutput,
-    `plex — ${mode}`,
+    plexSedimentContent,
     token,
-    `plex ${mode} sediment ${today}`,
+    `plex ${mode} sediment weave ${today}`,
   );
 
-  // ── Daily log: one summary block per sleep run ─────────────────────────────
-  // Full outputs live in nyx-/hex-/plex- files.
-  // The shared daily log gets a compact summary: mode + short excerpt per voice.
+  // ── Daily log: mode + nyx excerpt + hex excerpt + plex Residue only ────────
   const excerpt = (s: string) => s.replace(/\n+/g, ' ').slice(0, 120).trimEnd() + '…';
   const summaryLines = [
     `**sleep pass** — ${mode}`,
     ``,
-    `nyx: “${excerpt(nyxOutput)}”`,
-    hexOutput ? `hex: “${excerpt(hexOutput)}”` : null,
-    `plex: “${excerpt(plexOutput)}”`,
+    `nyx: "${excerpt(nyxOutput)}"`,
+    hexOutput ? `hex: "${excerpt(hexOutput)}"` : null,
+    ``,
+    `## Residue`,
+    ``,
+    residue,
   ].filter((l): l is string => l !== null).join('\n');
 
   await appendSediment(
@@ -390,27 +476,27 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     `sleep summary ${today}`,
   );
 
-  // ── State + DreamNode ──────────────────────────────────────────────────────────
+  // ── State + DreamNode ──────────────────────────────────────────────────────
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
 
-  // ── Firestore ──────────────────────────────────────────────────────────────────
+  // ── Firestore ──────────────────────────────────────────────────────────────
   await db.doc('plex_sleep/latest').set(
     {
       date: today,
       mode,
       nyx_excerpt: nyxOutput.slice(0, 280),
       hex_excerpt: hexOutput.slice(0, 280),
-      dream_excerpt: plexOutput.slice(0, 280),
+      plex_residue: residue,
       pending: true,
       createdAt: FieldValue.serverTimestamp(),
     },
     { merge: false }
   ).catch(() => {});
 
-  // ── Dream trigger ────────────────────────────────────────────────────────────
+  // ── Dream runner trigger ───────────────────────────────────────────────────
   if (willDream(mode, source)) {
     const cronSecret = process.env.CRON_SECRET ?? '';
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
@@ -435,7 +521,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     source,
     nyx: nyxOutput.slice(0, 200),
     hex: hexOutput.slice(0, 200),
-    dream: plexOutput.slice(0, 200),
+    plex_residue: residue,
     sediment_state: newState,
   });
 }

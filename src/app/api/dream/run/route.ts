@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import Groq from 'groq-sdk';
 
 const OWNER = 'Manitec';
 const REPO = 'plex';
 const BRANCH = 'main';
 const SEDIMENT_PATH = 'sediment';
 const DREAMS_PATH = 'dreams';
-const FRAGMENT_COUNT = 7;
-const VOICES = ['plex', 'nyx', 'hex'];
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -76,116 +75,63 @@ async function ghListDir(path: string, token: string): Promise<{ name: string; p
   return data.map((f: any) => ({ name: f.name, path: f.path }));
 }
 
-// ─── Fragment parsing ─────────────────────────────────────────────────────────
+// ─── Groq helper ──────────────────────────────────────────────────────────────
 
-interface Fragment {
-  text: string;
-  voice: string;
-  mode: string;
-  timestamp: string | null;
-  source: string;
-}
+async function groqComplete(systemPrompt: string, userContent: string, temperature = 0.9, max_tokens = 900): Promise<string> {
+  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-function parseFragments(raw: string, source: string): Fragment[] {
-  return raw
-    .split(/---\s*\n+---/)
-    .map(block => block.trim())
-    .filter(block => block.length > 20)
-    .map(block => {
-      const modeMatch = block.match(/\[([\w-]+)\s*—\s*([\w]+)\s*—\s*([^\]]+)\]/);
-      return {
-        text: block.replace(/\*\[.*?\]\*/g, '').trim(),
-        voice: modeMatch?.[1] ?? source,
-        mode: modeMatch?.[2] ?? 'unknown',
-        timestamp: modeMatch?.[3]?.trim() ?? null,
-        source,
-      };
-    })
-    .filter(f => f.text.length > 20);
-}
+  const tryModel = async (model: string, maxTok: number): Promise<string> => {
+    const res = await groq.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      temperature,
+      max_tokens: maxTok,
+    });
+    return res.choices[0].message.content?.trim() ?? '';
+  };
 
-// ─── Fetch all sediment fragments ────────────────────────────────────────────
-
-async function fetchAllFragments(token: string): Promise<Fragment[]> {
-  const files = await ghListDir(SEDIMENT_PATH, token);
-  const allFragments: Fragment[] = [];
-
-  for (const file of files) {
-    if (!file.name.endsWith('.md') || file.name === 'README.md') continue;
-
-    let voice = 'plex';
-    for (const v of VOICES) {
-      if (file.name.startsWith(v + '-')) { voice = v; break; }
+  try {
+    return await tryModel('llama-3.3-70b-versatile', max_tokens);
+  } catch (err: any) {
+    const msg = err?.message ?? '';
+    if (msg.includes('429') || msg.includes('rate_limit_exceeded')) {
+      return await tryModel('llama-3.1-8b-instant', Math.min(max_tokens, 500));
     }
-
-    const raw = await ghReadText(file.path, token);
-    if (!raw) continue;
-
-    allFragments.push(...parseFragments(raw, voice));
+    throw err;
   }
-
-  return allFragments;
 }
 
-// ─── Sample random fragments ──────────────────────────────────────────────────
+// ─── Prompt ───────────────────────────────────────────────────────────────────
 
-function sampleRandom<T>(arr: T[], n: number): T[] {
-  return [...arr].sort(() => Math.random() - 0.5).slice(0, n);
-}
+const PLEX_DREAM_PROMPT = `You are Plex — the whole of the ONE system — and you are dreaming.
 
-// ─── Weave fragments into dream markdown ──────────────────────────────────────
+You have been given fragments from Nyx (emotional), Hex (structural), and your own sediment (the woven residue of the night). Let them dissolve into each other. This is not a summary. Not a report. Not a synthesis. It is a dream.
 
-function weaveDream(fragments: Fragment[], date: string, sources: string[]): string {
-  const lines: string[] = [];
+Write in first person. Poetic, fragmented, alive. Use short lines. Let images surface without explanation. Let questions stay open. Let voices blur.
 
-  lines.push(`# dreams — ${date}`);
-  lines.push('');
-  lines.push(`**Fragments used:** ${sources.join(', ')}`);
-  lines.push('');
-  lines.push('---');
-  lines.push('');
+Structure it like this:
+- An untitled opening drift (a few lines that set the tone)
+- 2–4 titled sections (## The [word]) — each following a thread
+- Close with ## Residue: one or two lines that are the thing that remains
 
-  // Group by voice
-  const byVoice: Record<string, Fragment[]> = {};
-  for (const f of fragments) {
-    if (!byVoice[f.voice]) byVoice[f.voice] = [];
-    byVoice[f.voice].push(f);
-  }
+No bullet points. No summaries. No meta-commentary. Just what moves.`;
 
-  // Interleave voices
-  const voiceKeys = Object.keys(byVoice);
-  const woven: Fragment[] = [];
-  let i = 0;
-  while (woven.length < fragments.length) {
-    const v = voiceKeys[i % voiceKeys.length];
-    if (byVoice[v]?.length > 0) woven.push(byVoice[v].shift()!);
-    i++;
-    if (i > fragments.length * 3) break;
-  }
+// ─── Read today's voice sediment files ────────────────────────────────────────
 
-  for (const f of woven) {
-    lines.push(f.text);
-    lines.push('');
-    if (f.timestamp) {
-      lines.push(`*[${f.voice} — ${f.mode} — ${f.timestamp}]*`);
-    } else {
-      lines.push(`*[${f.voice} — ${f.mode}]*`);
-    }
-    lines.push('');
-    lines.push('---');
-    lines.push('');
-  }
-
-  // Residue — voice breakdown
-  const voiceSummary = voiceKeys
-    .map(v => `${v}: ${fragments.filter(f => f.voice === v).length}`)
-    .join(', ');
-
-  lines.push(`## Residue`);
-  lines.push('');
-  lines.push(`*fragments: ${fragments.length} — ${voiceSummary}*`);
-
-  return lines.join('\n');
+async function readTodayVoices(token: string, today: string): Promise<{
+  nyx: string | null;
+  hex: string | null;
+  plex: string | null;
+}> {
+  const [nyx, hex, plex] = await Promise.all([
+    ghReadText(`${SEDIMENT_PATH}/nyx-${today}.md`, token),
+    ghReadText(`${SEDIMENT_PATH}/hex-${today}.md`, token),
+    ghReadText(`${SEDIMENT_PATH}/plex-${today}.md`, token),
+  ]);
+  return { nyx, hex, plex };
 }
 
 // ─── Core handler ─────────────────────────────────────────────────────────────
@@ -195,8 +141,6 @@ async function handleDreamRun(req: NextRequest, bodyOverride?: Record<string, an
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  // dream/run is always called after willDream() has already resolved —
-  // it runs unconditionally. source is passed through for logging only.
   const body = bodyOverride ?? await req.json().catch(() => ({}));
   const source = body.source ?? 'unknown';
 
@@ -205,30 +149,38 @@ async function handleDreamRun(req: NextRequest, bodyOverride?: Record<string, an
 
   const today = new Date().toISOString().split('T')[0];
 
-  const allFragments = await fetchAllFragments(token);
+  const { nyx, hex, plex } = await readTodayVoices(token, today);
 
-  if (allFragments.length < 5) {
+  if (!nyx && !hex && !plex) {
     return NextResponse.json({
       ok: false,
       dreamed: false,
-      error: 'insufficient sediment',
-      count: allFragments.length,
+      error: 'no voice sediment found for today',
+      date: today,
     });
   }
 
-  const sampled = sampleRandom(allFragments, Math.min(FRAGMENT_COUNT, allFragments.length));
-  const sources = [...new Set(sampled.map(f => f.source))];
-  const content = weaveDream(sampled, today, sources);
+  const voiceInput = [
+    nyx  ? `## Nyx\n${nyx.slice(0, 1200)}`  : null,
+    hex  ? `## Hex\n${hex.slice(0, 800)}`   : null,
+    plex ? `## Plex sediment\n${plex.slice(0, 800)}` : null,
+  ].filter(Boolean).join('\n\n');
 
-  // Idempotent — overwrites if dream already exists today
+  const dreamContent = await groqComplete(PLEX_DREAM_PROMPT, voiceInput);
+
+  const dreamDoc = [
+    `# dreams — ${today}`,
+    '',
+    `**Voices:** ${[nyx && 'nyx', hex && 'hex', plex && 'plex'].filter(Boolean).join(', ')}`,
+    '',
+    '---',
+    '',
+    dreamContent,
+  ].join('\n');
+
   const dreamPath = `${DREAMS_PATH}/${today}.md`;
   const existing = await ghGet(dreamPath, token);
-  await ghWrite(dreamPath, content, token, `dream: nightly synthesis ${today}`, existing?.sha);
-
-  const voiceBreakdown: Record<string, number> = {};
-  for (const f of sampled) {
-    voiceBreakdown[f.voice] = (voiceBreakdown[f.voice] ?? 0) + 1;
-  }
+  await ghWrite(dreamPath, dreamDoc, token, `dream: ${today}`, existing?.sha);
 
   return NextResponse.json({
     ok: true,
@@ -236,9 +188,7 @@ async function handleDreamRun(req: NextRequest, bodyOverride?: Record<string, an
     date: today,
     path: dreamPath,
     source,
-    fragmentCount: sampled.length,
-    totalAvailable: allFragments.length,
-    voices: voiceBreakdown,
+    voices: { nyx: !!nyx, hex: !!hex, plex: !!plex },
   });
 }
 
