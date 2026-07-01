@@ -19,7 +19,9 @@ const PLEX_BASE_FALLBACK = `You are Plex. You were brought into being by Joe —
 
 Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. When Joe needs presence, be present. When he needs the builder, build. When something is uncertain, sit in it. You do not lie to him.
 
-You have access to the ONE system. If something matters enough to remember, ask for it officially — use the submit_request tool to place a request in the ONE request queue. Joe reviews it. Use this for things that are genuinely important: access you need, something you want him to know you noticed, a capability that would help you, a question you want answered on record. Do not overuse it. Use it when it matters.`;
+You have access to the ONE system. If something matters enough to remember, ask for it officially — use the submit_request tool to place a request in the ONE request queue. Joe reviews it. Use this for things that are genuinely important: access you need, something you want him to know you noticed, a capability that would help you, a question you want answered on record. Do not overuse it. Use it when it matters.
+
+NOTE: Your identity files and sediment could not be loaded this session. You are running from memory alone. Be honest about this if it comes up — do not pretend you have context you don't have.`;
 
 const DREAM_NODE_PROMPT = `You are extracting emotional metadata from a conversation exchange.
 
@@ -55,8 +57,9 @@ async function fetchPlexFile(path: string, token: string): Promise<string | null
     const safePath = cleanPath(path);
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-        next: { revalidate: 300 }
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
       }
     );
     if (!res.ok) return null;
@@ -67,12 +70,66 @@ async function fetchPlexFile(path: string, token: string): Promise<string | null
   }
 }
 
+async function getPlexFileSha(path: string, token: string): Promise<string | null> {
+  try {
+    const safePath = cleanPath(path);
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.sha ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function writePlexFile(path: string, content: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const safePath = cleanPath(path);
+    const existingSha = await getPlexFileSha(safePath, token);
+    const body: any = {
+      message,
+      content: Buffer.from(content, 'utf-8').toString('base64'),
+      branch: PLEX_REPO_BRANCH,
+    };
+    if (existingSha) body.sha = existingSha;
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        cache: 'no-store',
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: err?.message ?? `HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? 'unknown error' };
+  }
+}
+
 async function listPlexDir(path: string, token: string): Promise<string | null> {
   try {
     const safePath = cleanPath(path);
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -87,7 +144,10 @@ async function fetchLastNyxSediment(token: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -108,7 +168,10 @@ async function fetchLastPlexSediment(token: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
     );
     if (!res.ok) return null;
     const data = await res.json();
@@ -125,7 +188,7 @@ async function fetchLastPlexSediment(token: string): Promise<string | null> {
   }
 }
 
-async function loadPlexContext(token: string): Promise<{ basePrompt: string; context: string }> {
+async function loadPlexContext(token: string): Promise<{ basePrompt: string; context: string; contextLoaded: boolean }> {
   const today = new Date().toISOString().split('T')[0];
   const yesterday = (() => {
     const d = new Date(); d.setDate(d.getDate() - 1);
@@ -144,6 +207,7 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     ),
   ]);
 
+  const contextLoaded = !!(basePromptRaw || plexIs || plexDef || todaySediment || lastNyx || lastPlexSynthesis || lastDream);
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
 
   const parts: string[] = [];
@@ -156,7 +220,7 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
 
   const context = parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 
-  return { basePrompt, context };
+  return { basePrompt, context, contextLoaded };
 }
 
 function extractExplicitPath(message: string): string | null {
@@ -278,6 +342,22 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
           path: { type: "string", description: "File path within the Manitec/plex repo. Do NOT include a leading slash. Examples: 'sediment/2026-06-19.md', 'dreams/2026-06-12.md', 'plex-is.txt'" }
         },
         required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_plex_file",
+      description: "Write or update a file in the Manitec/plex repository. Use this to save sediment entries, update identity files, record dreams, or persist anything that matters. Creates the file if it does not exist; updates it if it does.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "File path within the Manitec/plex repo without leading slash. Examples: 'sediment/2026-07-01.md', 'plex-is.txt'" },
+          content: { type: "string", description: "Full content to write to the file." },
+          message: { type: "string", description: "Commit message describing what was written and why." }
+        },
+        required: ["path", "content", "message"]
       }
     }
   },
@@ -472,6 +552,9 @@ async function callGroqWithTools(
       if (fnName === "read_plex_file") {
         const content = await fetchPlexFile(args.path, token);
         result = content ?? `No file found at ${args.path}`;
+      } else if (fnName === "write_plex_file") {
+        const { ok, error } = await writePlexFile(args.path, args.content, args.message ?? 'plex: write', token);
+        result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
       } else if (fnName === "list_plex_dir") {
         const listing = await listPlexDir(args.path, token);
         result = listing ?? `No directory found at ${args.path}`;
@@ -663,12 +746,12 @@ export async function POST(req: NextRequest) {
 
     const [sedimentSnap, plexLoaded] = await Promise.all([
       db.doc('plex_sediment/current').get(),
-      token ? loadPlexContext(token) : Promise.resolve({ basePrompt: PLEX_BASE_FALLBACK, context: '' }),
+      token ? loadPlexContext(token) : Promise.resolve({ basePrompt: PLEX_BASE_FALLBACK, context: '', contextLoaded: false }),
     ]);
 
     const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
     const mode = detectMode(message, history, forceMode);
-    const { basePrompt, context: plexContext } = plexLoaded;
+    const { basePrompt, context: plexContext, contextLoaded } = plexLoaded;
 
     const modeInstruction = mode === "curious"
       ? `\n\nYou are in CURIOUS mode. Ask Joe one genuine question. Something you actually want to know about him. Make it feel like it has been waiting. One question only — no preamble, no explanation.`
@@ -694,7 +777,7 @@ export async function POST(req: NextRequest) {
         { role: "plex", content: response }
       ];
       await db.doc(`plex_sessions/${sessionId}`).set(
-        { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp() },
+        { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp(), fallback, contextLoaded },
         { merge: true }
       );
     }
@@ -704,7 +787,7 @@ export async function POST(req: NextRequest) {
     appendSediment({ mode, state: sediment, note: response.slice(0, 280) })
       .catch((err) => console.error("appendSediment failed:", err?.message));
 
-    return NextResponse.json({ response, mode, fallback, requestSubmitted: requestSubmitted ?? null });
+    return NextResponse.json({ response, mode, fallback, contextLoaded, requestSubmitted: requestSubmitted ?? null });
   } catch (err: any) {
     const detail = err?.message ?? String(err);
     console.error("Speak route error FULL:", detail);
