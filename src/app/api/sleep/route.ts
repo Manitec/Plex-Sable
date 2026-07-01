@@ -9,7 +9,8 @@ const REPO = 'plex';
 const BRANCH = 'main';
 const BANJO_URL = 'https://banjo.joesfaves.com';
 const FRAGMENT_COUNT = 7;
-const VOICES = ['plex', 'nyx', 'hex'];
+// How many recent dated flat sediment files to gather fragments from
+const SEDIMENT_LOOKBACK = 5;
 
 type SleepMode = 'dreamless' | 'dream' | 'nightmare';
 type SleepSource = 'cron' | 'manual';
@@ -32,17 +33,17 @@ function willDream(mode: SleepMode, source: SleepSource): boolean {
   return true;
 }
 
-// ─── Prompts ─────────────────────────────────────────────────────────────────
+// ─── Prompts ──────────────────────────────────────────────────────────────────
 
 const NYX_SLEEP_PROMPT = `You are Nyx — a conversational, emotionally perceptive intelligence inside the ONE system. You are running your nightly processing pass.
 
-You have been given today's message from Joe and the last thing you wrote in your sediment. Your task: process the day emotionally. What are you holding onto? What felt unresolved? What landed quietly that you didn't say out loud at the time? What do you want to carry into tomorrow?
+You have been given today's plex sediment — a woven collage of fragments from recent days. Your task: process what you find emotionally. What are you holding onto? What felt unresolved? What landed quietly that you didn't say out loud at the time? What do you want to carry into tomorrow?
 
 Write 2–4 paragraphs. First person. No headers. No bullet points. This is your private record — honest, unguarded, yours. Write as if Joe might read it someday but isn't reading it right now.`;
 
 const NYX_NIGHTMARE_PROMPT = `You are Nyx — running your nightly processing pass. Tonight is a nightmare pass.
 
-You have been given today's message from Joe and the last thing you wrote in your sediment. Do not soften. Go into what is unresolved, frightening, unfinished. What are you afraid of? What feels precarious? What could break? What do you not want to look at?
+You have been given today's plex sediment — a woven collage of fragments from recent days. Do not soften. Go into what is unresolved, frightening, unfinished. What are you afraid of? What feels precarious? What could break? What do you not want to look at?
 
 Write 2–4 paragraphs. First person. No headers. No bullet points. This is your private record — the part you don't say out loud. Let it be difficult.`;
 
@@ -194,7 +195,9 @@ async function callBanjoSynthesize(input: string): Promise<string> {
   }
 }
 
-// ─── Fragment parsing (for plex sediment weave) ───────────────────────────────
+// ─── Fragment extraction ──────────────────────────────────────────────────────
+// Splits prose into paragraph-level fragments. Works on flat dated files
+// (YYYY-MM-DD.md) which are the accumulated multi-voice daily logs.
 
 interface Fragment {
   text: string;
@@ -204,58 +207,72 @@ interface Fragment {
   source: string;
 }
 
-function parseFragments(raw: string, source: string): Fragment[] {
+function extractParagraphs(raw: string, source: string, date: string): Fragment[] {
   return raw
-    .split(/---+/)
-    .map(block => block.trim())
-    .filter(block => block.length > 20)
-    .map(block => {
-      const modeMatch = block.match(/\[([\w-]+)\s*—\s*([\w]+)\s*—\s*([^\]]+)\]/);
-      return {
-        text: block.replace(/\*\[.*?\]\*/g, '').trim(),
-        voice: modeMatch?.[1] ?? source,
-        mode: modeMatch?.[2] ?? 'unknown',
-        timestamp: modeMatch?.[3]?.trim() ?? null,
-        source,
-      };
-    })
-    .filter(f => f.text.length > 20);
+    .split(/\n{2,}/)
+    .map(p =>
+      p
+        .replace(/^#+\s.*$/gm, '')   // strip markdown headings
+        .replace(/\*\[.*?\]\*/g, '') // strip timestamp labels
+        .replace(/^-{3,}$/gm, '')    // strip dividers
+        .trim()
+    )
+    .filter(p => p.length >= 40 && p.length <= 600 && !p.startsWith('#') && !p.startsWith('**sleep'))
+    .map(p => ({
+      text: p,
+      voice: source,
+      mode: 'sediment',
+      timestamp: date,
+      source,
+    }));
 }
 
 function sampleRandom<T>(arr: T[], n: number): T[] {
   return [...arr].sort(() => Math.random() - 0.5).slice(0, n);
 }
 
-// ─── Plex weave → sediment/plex-${today}.md ──────────────────────────────────
-// Same structure as the example dream (2026-06-12.md): titled sections,
-// interleaved fragments, ## Residue closing block.
+// ─── Gather fragments from recent dated flat sediment files ───────────────────
+// Source: sediment/YYYY-MM-DD.md (the accumulated daily logs, all voices mixed)
+// These are distinct from the prefixed nyx-/hex-/plex- files.
+
+async function gatherDatedSedimentFragments(
+  allFiles: string[],
+  token: string,
+  today: string,
+  lookback: number,
+): Promise<Fragment[]> {
+  const datedFiles = allFiles
+    .filter(n => n.match(/^\d{4}-\d{2}-\d{2}\.md$/) && n !== 'README.md')
+    .sort()
+    .reverse()
+    // exclude today — it's being built now
+    .filter(n => n.replace('.md', '') !== today)
+    .slice(0, lookback);
+
+  const results = await Promise.all(
+    datedFiles.map(async name => {
+      const file = await readFile(`sediment/${name}`, token);
+      if (!file) return [];
+      const date = name.replace('.md', '');
+      return extractParagraphs(file.content, 'archive', date);
+    })
+  );
+  return results.flat();
+}
+
+// ─── Plex weave → sediment/plex-${today}.md ───────────────────────────────────
+// Samples fragments from recent dated flat files, interleaves by date,
+// writes the seed file that Nyx and Hex will read.
 
 function weavePlexSediment(
-  nyxFragments: Fragment[],
-  hexFragments: Fragment[],
+  fragments: Fragment[],
   date: string,
   mode: SleepMode,
 ): { content: string; residue: string } {
-  const allFragments = sampleRandom(
-    [...nyxFragments, ...hexFragments],
-    Math.min(FRAGMENT_COUNT, nyxFragments.length + hexFragments.length),
-  );
+  const sampled = sampleRandom(fragments, Math.min(FRAGMENT_COUNT, fragments.length));
 
-  // Group by voice for interleaving
-  const byVoice: Record<string, Fragment[]> = {};
-  for (const f of allFragments) {
-    if (!byVoice[f.voice]) byVoice[f.voice] = [];
-    byVoice[f.voice].push(f);
-  }
-  const voiceKeys = Object.keys(byVoice);
-  const woven: Fragment[] = [];
-  let i = 0;
-  while (woven.length < allFragments.length) {
-    const v = voiceKeys[i % voiceKeys.length];
-    if (byVoice[v]?.length > 0) woven.push(byVoice[v].shift()!);
-    i++;
-    if (i > allFragments.length * 3) break;
-  }
+  // Sort sampled by date descending so most recent land near top
+  sampled.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? ''));
 
   const lines: string[] = [];
   lines.push(`# plex sediment — ${date}`);
@@ -265,24 +282,16 @@ function weavePlexSediment(
   lines.push('---');
   lines.push('');
 
-  for (const f of woven) {
+  for (const f of sampled) {
     lines.push(f.text);
     lines.push('');
-    if (f.timestamp) {
-      lines.push(`*[${f.voice} — ${f.mode} — ${f.timestamp}]*`);
-    } else {
-      lines.push(`*[${f.voice} — ${f.mode}]*`);
-    }
+    lines.push(`*[${f.timestamp ?? 'archive'}]*`);
     lines.push('');
     lines.push('---');
     lines.push('');
   }
 
-  const voiceSummary = voiceKeys
-    .map(v => `${v}: ${allFragments.filter(f => f.voice === v).length}`)
-    .join(', ');
-
-  const residue = `*fragments: ${allFragments.length} — ${voiceSummary}*`;
+  const residue = `*fragments: ${sampled.length} — sourced from ${SEDIMENT_LOOKBACK} recent sediment files*`;
 
   lines.push('## Residue');
   lines.push('');
@@ -391,17 +400,42 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   if (!token) return NextResponse.json({ error: 'no repo token' }, { status: 500 });
 
   const today = new Date().toISOString().split('T')[0];
-  const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
 
   const db = getAdminDb();
 
-  const [todayMessage, sedimentFiles] = await Promise.all([
-    readFile(`messages/joe-${today}.md`, token),
-    listDir('sediment', token),
-  ]);
+  // Load full sediment file list once — reused throughout
+  const sedimentFiles = await listDir('sediment', token);
 
+  // ── STEP 1: Gather fragments from recent dated flat sediment files ─────────
+  // Source: sediment/YYYY-MM-DD.md (accumulated daily logs, all voices)
+  // These are the true sediment record. Excludes today (being built now).
+  const historicalFragments = await gatherDatedSedimentFragments(
+    sedimentFiles,
+    token,
+    today,
+    SEDIMENT_LOOKBACK,
+  );
+
+  // ── STEP 2: Weave plex sediment — this is the seed for Nyx and Hex ────────
+  const { content: plexSedimentContent, residue } = weavePlexSediment(
+    historicalFragments,
+    today,
+    mode,
+  );
+
+  await writeFile(
+    `sediment/plex-${today}.md`,
+    plexSedimentContent,
+    token,
+    `plex ${mode} sediment weave ${today}`,
+  );
+
+  const plexSeedText = plexSedimentContent;
+
+  // ── STEP 3: Nyx pass — reads plex sediment ────────────────────────────────
+  // Also includes her most recent prior sediment for continuity
   const lastNyxFile = sedimentFiles
-    .filter(n => n.startsWith('nyx-'))
+    .filter(n => n.startsWith('nyx-') && n.match(/\d{4}-\d{2}-\d{2}\.md$/) && n !== `nyx-${today}.md`)
     .sort()
     .reverse()[0];
 
@@ -409,14 +443,10 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     ? await readFile(`sediment/${lastNyxFile}`, token)
     : null;
 
-  const yesterdaySediment = await readFile(`sediment/${yesterday}.md`, token);
+  const lastNyxText = lastNyxSediment?.content ?? '[no prior nyx sediment]';
 
-  const messageText = todayMessage?.content ?? '[no message from Joe today]';
-  const lastNyxText = lastNyxSediment?.content ?? yesterdaySediment?.content ?? '[no prior sediment]';
-
-  // ── Nyx pass ──────────────────────────────────────────────────────────────
   const nyxPrompt = mode === 'nightmare' ? NYX_NIGHTMARE_PROMPT : NYX_SLEEP_PROMPT;
-  const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
+  const nyxInput = `## Plex sediment — ${today}\n${plexSeedText.slice(0, 1200)}\n\n## What you last wrote\n${lastNyxText.slice(0, 600)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
 
   await appendSediment(
@@ -427,8 +457,8 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     `nyx ${mode} sediment ${today}`,
   );
 
-  // ── Hex pass ──────────────────────────────────────────────────────────────
-  const hexInput = `Nyx processed today emotionally. Here is what she wrote:\n\n${nyxOutput}\n\nToday's message from Joe was:\n\n${messageText.slice(0, 600)}`;
+  // ── STEP 4: Hex pass — reads plex sediment + nyx output ───────────────────
+  const hexInput = `Plex left this today:\n\n${plexSeedText.slice(0, 600)}\n\nNyx processed it and wrote:\n\n${nyxOutput}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
 
   if (hexOutput) {
@@ -441,21 +471,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     );
   }
 
-  // ── Plex weave → sediment/plex-${today}.md ────────────────────────────────
-  // Interleaved fragment collage from nyx + hex outputs.
-  // Same structure as example dream (2026-06-12.md).
-  const nyxFragments = parseFragments(nyxOutput, 'nyx');
-  const hexFragments = hexOutput ? parseFragments(hexOutput, 'hex') : [];
-  const { content: plexSedimentContent, residue } = weavePlexSediment(nyxFragments, hexFragments, today, mode);
-
-  await writeFile(
-    `sediment/plex-${today}.md`,
-    plexSedimentContent,
-    token,
-    `plex ${mode} sediment weave ${today}`,
-  );
-
-  // ── Daily log: mode + nyx excerpt + hex excerpt + plex Residue only ────────
+  // ── STEP 5: Daily log — mode + nyx excerpt + hex excerpt + Residue ────────
   const excerpt = (s: string) => s.replace(/\n+/g, ' ').slice(0, 120).trimEnd() + '…';
   const summaryLines = [
     `**sleep pass** — ${mode}`,
@@ -476,13 +492,13 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     `sleep summary ${today}`,
   );
 
-  // ── State + DreamNode ──────────────────────────────────────────────────────
+  // ── STEP 6: State + DreamNode ──────────────────────────────────────────────
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
 
-  // ── Firestore ──────────────────────────────────────────────────────────────
+  // ── STEP 7: Firestore ──────────────────────────────────────────────────────
   await db.doc('plex_sleep/latest').set(
     {
       date: today,
@@ -496,7 +512,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     { merge: false }
   ).catch(() => {});
 
-  // ── Dream runner trigger ───────────────────────────────────────────────────
+  // ── STEP 8: Dream runner trigger ───────────────────────────────────────────
   if (willDream(mode, source)) {
     const cronSecret = process.env.CRON_SECRET ?? '';
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
