@@ -14,7 +14,7 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-// ── SYN-E: question detection ─────────────────────────────────────────────
+// ── SYN-E: question detection ─────────────────────────────────────────────────
 function isQuestion(prompt: string | null): boolean {
   if (!prompt || prompt.trim().length < 8) return false;
   const p = prompt.trim().toLowerCase();
@@ -23,7 +23,7 @@ function isQuestion(prompt: string | null): boolean {
   return false;
 }
 
-// ── SYN-E: search + synthesize ──────────────────────────────────────────
+// ── SYN-E ─────────────────────────────────────────────────────────────────────
 async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
   try {
     const srcRes = await fetch(`${baseUrl}/api/search`, {
@@ -33,12 +33,10 @@ async function runSynE(question: string, pageContext: string, baseUrl: string): 
     });
     const srcData = srcRes.ok ? await srcRes.json() : null;
     const searchResults: string = srcData?.results
-      ? srcData.results
-          .slice(0, 5)
+      ? srcData.results.slice(0, 5)
           .map((r: any, i: number) => `[${i + 1}] ${r.title}\n${r.snippet ?? ""}\n${r.url ?? ""}`)
           .join("\n\n")
       : "(no search results)";
-
     const synRes = await fetch(`${baseUrl}/api/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -73,7 +71,6 @@ export async function POST(req: NextRequest) {
     let source = "bookmarklet";
     let sessionId = "joe";
     let silent = false;
-    let capabilities: string[] = [];
     let interactiveElements: object[] = [];
 
     if (isMultipart) {
@@ -90,14 +87,17 @@ export async function POST(req: NextRequest) {
       silent             = form.get("silent") === "true";
     } else {
       const body = await req.json();
+      // Note: capabilities field accepted but no longer used as a gate —
+      // action intent is determined purely by prompt content.
       ({ url, title, selectedText, pageText, prompt, imageUrl,
          source = "bookmarklet", sessionId = "joe", silent = false,
-         capabilities = [], interactiveElements = [] } = body);
+         interactiveElements = [] } = body);
     }
 
-    const hasImage  = !!(imageUrl || imageFile);
-    const canAct    = Array.isArray(capabilities) && capabilities.length > 0;
-    const fromPE    = source === "plex-electron";
+    const hasImage     = !!(imageUrl || imageFile);
+    const fromPE       = source === "plex-electron";
+    // Action path: PE is always capable. For bookmarklet, only act if elements were sent.
+    const canAct       = fromPE || interactiveElements.length > 0;
     const shouldSearch = fromPE && isQuestion(prompt);
 
     if (!hasImage && !url) {
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     let actions: object[] = [];
     let synEAnswer: string | null = null;
 
-    // ── SYN-E ──────────────────────────────────────────────────────────────────
+    // ── SYN-E ─────────────────────────────────────────────────────────────────
     let synEPromise: Promise<string> | null = null;
     if (shouldSearch && prompt) {
       const pageContext = [
@@ -121,9 +121,7 @@ export async function POST(req: NextRequest) {
       synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
     }
 
-    // ── VISION PATH ─────────────────────────────────────────────────────────────
-    // Vision requires Groq (multimodal). Cerebras/OpenRouter free tier don't support it.
-    // On quota error: return a graceful message rather than a hard 500.
+    // ── VISION PATH ───────────────────────────────────────────────────────────
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -134,10 +132,8 @@ export async function POST(req: NextRequest) {
       } else {
         imageContent = { type: "image_url", image_url: { url: imageUrl! } };
       }
-
       const userText     = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
       const visionPrompt = `${baseIdentity}${PLEX_BROWSER_CONTEXT}${PLEX_VISION_TONE}`;
-
       try {
         const completion = await groq.chat.completions.create({
           model: VISION_MODEL,
@@ -153,15 +149,14 @@ export async function POST(req: NextRequest) {
         const msg = String(err?.message ?? "");
         const isQuota = err?.status === 429 || msg.includes("rate_limit") || msg.includes("TPD") || msg.includes("quota");
         if (isQuota) {
-          response = "I\'m at my vision limit right now — Groq\'s daily token cap. Try again in about an hour.";
-          console.warn('[vision] Groq quota hit — returning graceful message');
-        } else {
-          throw err;
-        }
+          response = "I'm at my vision limit right now — Groq's daily token cap. Try again in about an hour.";
+          console.warn('[vision] Groq quota — graceful fallback message');
+        } else { throw err; }
       }
 
-    // ── ACTION PATH ─────────────────────────────────────────────────────────────
-    // Uses completeWithFallback — action planning works fine on Cerebras/OpenRouter.
+    // ── ACTION PATH ───────────────────────────────────────────────────────────
+    // Gate: prompt has action intent AND we're in a context where we can act.
+    // canAct is true whenever source === 'plex-electron' (PE always sends elements).
     } else if (canAct && isActionIntent(prompt)) {
       const elementsBlock = interactiveElements.length
         ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM):\n${JSON.stringify(interactiveElements, null, 2)}`
@@ -194,7 +189,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH ────────────────────────────────────────────────────────────
+    // ── OBSERVE PATH ──────────────────────────────────────────────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
@@ -219,7 +214,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Resolve SYN-E ────────────────────────────────────────────────────────────
+    // ── Resolve SYN-E ─────────────────────────────────────────────────────────
     if (synEPromise) {
       synEAnswer = await synEPromise;
       if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
@@ -227,7 +222,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── LOG ────────────────────────────────────────────────────────────────────
+    // ── LOG ───────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -244,7 +239,7 @@ export async function POST(req: NextRequest) {
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ────────────────────────────────────────────────────────────────
+    // ── SEDIMENT ──────────────────────────────────────────────────────────────
     if (!silent) {
       const sedimentNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`

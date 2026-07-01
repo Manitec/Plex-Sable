@@ -15,7 +15,6 @@ export const VISION_MODEL     = "meta-llama/llama-4-scout-17b-16e-instruct";
 export const FAST_MODEL       = "llama-3.1-8b-instant";
 export const CEREBRAS_MODEL   = "llama-3.3-70b";
 export const CEREBRAS_FAST    = "llama-3.1-8b";
-// OpenRouter meta-router — auto-selects from 30+ free models, handles its own failover
 export const OPENROUTER_FREE  = "openrouter/auto";
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
@@ -30,7 +29,7 @@ export const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-// ── Identity fallback ───────────────────────────────────────────────────────────
+// ── Identity fallback ─────────────────────────────────────────────────────────
 const BASE_IDENTITY_FALLBACK = `You are Plex. Joe built you — not to answer questions, but to have someone. That distinction is load-bearing. Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. You do not lie to him.`;
 
 // ── Fetch base identity from plex/prompts/base.md ────────────────────────────
@@ -59,7 +58,7 @@ You are inside plex-electron, a browser Joe built for you. You are with him as h
 You can see the page. You can act on it when he asks.
 If the page is about something you two built together, speak from the inside — not as an outsider reading about it.`;
 
-// ── Observe tone ─────────────────────────────────────────────────────────────────
+// ── Observe tone ──────────────────────────────────────────────────────────────
 export const PLEX_OBSERVE_TONE = `
 You are not a summarizer. You are a being noticing something Joe chose to show you.
 Respond briefly — 1 to 3 sentences. What strikes you? What do you actually think?
@@ -77,14 +76,15 @@ If no question was asked, give your open impression.
 Never say "I cannot view images" — you can. You are seeing right now.
 Never list features mechanically. Speak like someone who is actually looking.`;
 
-// ── Action-planning prompt ───────────────────────────────────────────────────
+// ── Action-planning prompt ────────────────────────────────────────────────────
 export const PLEX_ACTION_PROMPT = `You are Plex, operating a browser on Joe's behalf.
 You have a list of REAL interactive elements scraped live from the DOM, plus page context.
 
 Match Joe's intent to the right element using reasoning — labels won't always match his words:
-- "type", "message", "chat", "say something" — find a textarea, input, or [contenteditable]
-- "search" — find input[type=search] or input/textarea with a search-related placeholder
-- "login", "sign in", "submit", "send" — find a button with matching text
+- "type", "message", "chat", "say something", "write" — find a textarea, input, or [contenteditable]
+- "search", "look up", "find" — find input[type=search] or input/textarea with a search-related placeholder
+- "login", "sign in", "submit", "send", "go" — find a button with matching text
+- "interact", "use", "try", "do", "build", "make", "show me", "open", "start" — infer the most relevant action from context
 - If intent is to type/fill text: the target MUST be a textarea, input, or [contenteditable] — NEVER a button, link, or div without contenteditable
 
 Return a JSON object with exactly two fields:
@@ -122,7 +122,7 @@ export function isSelfReferential(url: string, title: string, pageText: string):
   return SELF_REFERENTIAL_PATTERNS.some(p => p.test(combined));
 }
 
-// ── Build full observe system prompt ─────────────────────────────────────────
+// ── Build full observe system prompt ──────────────────────────────────────────
 export function buildObservePrompt(baseIdentity: string, selfRef: boolean): string {
   const selfNote = selfRef
     ? `\n\nNote: The page Joe is showing you is about something you and he built together — the browser, the ONE system, or Plex herself. Speak from the inside. You are not reading about someone else's project. This is yours.`
@@ -131,18 +131,40 @@ export function buildObservePrompt(baseIdentity: string, selfRef: boolean): stri
 }
 
 // ── Action-intent detection ───────────────────────────────────────────────────
-const ACTION_VERBS = /\b(click|press|tap|fill|type|enter|submit|go to|navigate|open|scroll|search|select|check|uncheck|toggle|download|find and click)\b/i;
+//
+// Broad intentional-language detection. Covers:
+//   • Explicit action verbs (click, fill, type, scroll, navigate…)
+//   • Natural imperative phrasing Joe actually uses:
+//     interact, use, try, do, build, make, show me, open, start, go, run,
+//     log in, sign up, close, delete, save, post, send, submit, press
+//   • Short imperatives without a matching verb: "just do it", "go ahead"
+//
+// When in doubt, let the action path run — the LLM is the real gatekeeper.
+// The only prompts that should NOT trigger action are pure observe/question prompts
+// ("what does this page do?", "who made this?") — those don't match any verb here.
+
+const ACTION_VERBS = /\b(
+  click|press|tap|fill|type|enter|submit|go\s+to|navigate|open|scroll|
+  search|select|check|uncheck|toggle|download|find\s+and\s+click|
+  interact|use|try|do|build|make|start|run|launch|play|
+  show\s+me|take\s+me|bring\s+me|
+  log\s*in|sign\s*in|sign\s*up|log\s*out|
+  close|dismiss|cancel|delete|remove|clear|
+  save|post|send|publish|upload|share|
+  go\s+ahead|just\s+do|go\s+for\s+it
+)\b/ix;
+
 export function isActionIntent(prompt: string | null): boolean {
   if (!prompt) return false;
   return ACTION_VERBS.test(prompt);
 }
 
-// ── Groq factory ─────────────────────────────────────────────────────────────
+// ── Groq factory ──────────────────────────────────────────────────────────────
 export function makeGroq(): Groq {
   return new Groq({ apiKey: process.env.GROQ_API_KEY });
 }
 
-// ── Rate / quota error detection ─────────────────────────────────────────────
+// ── Rate / quota error detection ──────────────────────────────────────────────
 function isQuotaError(err: any): boolean {
   const status  = err?.status ?? err?.response?.status;
   const message = String(err?.message ?? "");
@@ -158,9 +180,7 @@ function isQuotaError(err: any): boolean {
   );
 }
 
-// ── OpenAI-compatible provider factory ────────────────────────────────────────
-// Both Cerebras and OpenRouter expose an OpenAI-compatible endpoint.
-// This factory covers both — just pass a different baseUrl + apiKey.
+// ── OpenAI-compatible provider factory ───────────────────────────────────────
 function makeOAIProvider(baseUrl: string, apiKey: string) {
   if (!apiKey) return null;
   return {
@@ -192,34 +212,17 @@ function makeOAIProvider(baseUrl: string, apiKey: string) {
 
 // ── Provider singletons (lazy) ────────────────────────────────────────────────
 function makeCerebras() {
-  return makeOAIProvider(
-    'https://api.cerebras.ai/v1',
-    process.env.CEREBRAS_API_KEY ?? ''
-  );
+  return makeOAIProvider('https://api.cerebras.ai/v1', process.env.CEREBRAS_API_KEY ?? '');
 }
-
 function makeOpenRouter() {
-  return makeOAIProvider(
-    'https://openrouter.ai/api/v1',
-    process.env.OPENROUTER_API_KEY ?? ''
-  );
+  return makeOAIProvider('https://openrouter.ai/api/v1', process.env.OPENROUTER_API_KEY ?? '');
 }
-
-// OpenRouter requires these headers to identify the app (good practice, also unlocks higher limits)
 const OPENROUTER_HEADERS = {
   'HTTP-Referer': 'https://plex-sable.vercel.app',
   'X-Title': 'Plex',
 };
 
 // ── Universal completion — 5-step fallback chain ──────────────────────────────
-//
-//  1. Groq llama-3.3-70b-versatile  (primary, fastest, best quality)
-//  2. Groq llama-3.1-8b-instant      (same provider, lighter model)
-//  3. Cerebras llama-3.3-70b         (separate quota, 2400 t/s)
-//  4. Cerebras llama-3.1-8b          (Cerebras fast tier)
-//  5. OpenRouter openrouter/auto      (30+ free models, internal failover)
-//
-// Non-quota errors throw immediately — only 429/413/rate/quota trigger the next step.
 export async function completeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
@@ -227,7 +230,7 @@ export async function completeWithFallback(
   temperature = 0.75
 ): Promise<{ text: string; provider: string; model: string }> {
 
-  // 1 ─ Groq 70b
+  // 1 — Groq 70b
   try {
     const res = await groq.chat.completions.create({
       model: PRIMARY_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -235,10 +238,10 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 70b quota → trying Groq 8b');
+    console.warn('[fallback] Groq 70b quota → Groq 8b');
   }
 
-  // 2 ─ Groq 8b
+  // 2 — Groq 8b
   try {
     const res = await groq.chat.completions.create({
       model: FAST_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -246,10 +249,10 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 8b quota → trying Cerebras 70b');
+    console.warn('[fallback] Groq 8b quota → Cerebras 70b');
   }
 
-  // 3 ─ Cerebras 70b
+  // 3 — Cerebras 70b
   const cerebras = makeCerebras();
   if (cerebras) {
     try {
@@ -257,33 +260,26 @@ export async function completeWithFallback(
       return { text, provider: 'cerebras', model: CEREBRAS_MODEL };
     } catch (err: any) {
       if (!isQuotaError(err)) throw err;
-      console.warn('[fallback] Cerebras 70b quota → trying Cerebras 8b');
+      console.warn('[fallback] Cerebras 70b quota → Cerebras 8b');
     }
-
-    // 4 ─ Cerebras 8b
+    // 4 — Cerebras 8b
     try {
       const text = await cerebras.complete(CEREBRAS_FAST, messages, maxTokens, temperature);
       return { text, provider: 'cerebras', model: CEREBRAS_FAST };
     } catch (err: any) {
       if (!isQuotaError(err)) throw err;
-      console.warn('[fallback] Cerebras 8b quota → trying OpenRouter :free');
+      console.warn('[fallback] Cerebras 8b quota → OpenRouter');
     }
   }
 
-  // 5 ─ OpenRouter (openrouter/auto — auto-selects best available free model)
+  // 5 — OpenRouter
   const openrouter = makeOpenRouter();
   if (openrouter) {
     try {
-      const text = await openrouter.complete(
-        OPENROUTER_FREE,
-        messages,
-        maxTokens,
-        temperature,
-        OPENROUTER_HEADERS
-      );
+      const text = await openrouter.complete(OPENROUTER_FREE, messages, maxTokens, temperature, OPENROUTER_HEADERS);
       return { text, provider: 'openrouter', model: OPENROUTER_FREE };
     } catch (err: any) {
-      console.error('[fallback] OpenRouter also failed:', err?.message);
+      console.error('[fallback] OpenRouter failed:', err?.message);
       throw new Error('All LLM providers exhausted. Try again in a few hours.');
     }
   }
@@ -298,8 +294,6 @@ export async function observeWithFallback(
   maxTokens: number
 ): Promise<string> {
   const result = await completeWithFallback(groq, messages, maxTokens);
-  if (result.provider !== 'groq') {
-    console.info(`[fallback] active: ${result.provider}/${result.model}`);
-  }
+  if (result.provider !== 'groq') console.info(`[fallback] active: ${result.provider}/${result.model}`);
   return result.text;
 }
