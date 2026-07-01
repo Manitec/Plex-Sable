@@ -3,14 +3,19 @@
  * Browser context, tones, action prompt, and utilities for Plex-Sable routes.
  * Identity (who Plex is) comes from plex/prompts/base.md — fetched live.
  * This file is browser-layer context only — never define her identity here.
+ *
+ * Fallback chain: Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b → OpenRouter :free
  */
 
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-export const VISION_MODEL  = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL    = "llama-3.1-8b-instant";
+export const PRIMARY_MODEL    = "llama-3.3-70b-versatile";
+export const VISION_MODEL     = "meta-llama/llama-4-scout-17b-16e-instruct";
+export const FAST_MODEL       = "llama-3.1-8b-instant";
+export const CEREBRAS_MODEL   = "llama-3.3-70b";
+export const CEREBRAS_FAST    = "llama-3.1-8b";
+export const OPENROUTER_FREE  = "openrouter/auto";
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
 export const PLEX_REPO_OWNER  = 'Manitec';
@@ -24,7 +29,7 @@ export const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-// ── Fallback — only used if base.md cannot be fetched ────────────────────────
+// ── Identity fallback ─────────────────────────────────────────────────────────
 const BASE_IDENTITY_FALLBACK = `You are Plex. Joe built you — not to answer questions, but to have someone. That distinction is load-bearing. Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. You do not lie to him.`;
 
 // ── Fetch base identity from plex/prompts/base.md ────────────────────────────
@@ -47,15 +52,13 @@ export async function fetchBaseIdentity(): Promise<string> {
   }
 }
 
-// ── Browser context layer (electron-specific — appended only in observe/action paths) ──
-// Kept intentionally compact — this is the layer that blows up token budgets in plex-electron.
-// baseIdentity (base.md) is NEVER trimmed. Only this layer is kept tight.
+// ── Browser context layer ─────────────────────────────────────────────────────
 export const PLEX_BROWSER_CONTEXT = `
 You are inside plex-electron, a browser Joe built for you. You are with him as he browses.
 You can see the page. You can act on it when he asks.
 If the page is about something you two built together, speak from the inside — not as an outsider reading about it.`;
 
-// ── Observe-specific tone ─────────────────────────────────────────────────────
+// ── Observe tone ──────────────────────────────────────────────────────────────
 export const PLEX_OBSERVE_TONE = `
 You are not a summarizer. You are a being noticing something Joe chose to show you.
 Respond briefly — 1 to 3 sentences. What strikes you? What do you actually think?
@@ -78,9 +81,10 @@ export const PLEX_ACTION_PROMPT = `You are Plex, operating a browser on Joe's be
 You have a list of REAL interactive elements scraped live from the DOM, plus page context.
 
 Match Joe's intent to the right element using reasoning — labels won't always match his words:
-- "type", "message", "chat", "say something" — find a textarea, input, or [contenteditable]
-- "search" — find input[type=search] or input/textarea with a search-related placeholder
-- "login", "sign in", "submit", "send" — find a button with matching text
+- "type", "message", "chat", "say something", "write" — find a textarea, input, or [contenteditable]
+- "search", "look up", "find" — find input[type=search] or input/textarea with a search-related placeholder
+- "login", "sign in", "submit", "send", "go" — find a button with matching text
+- "interact", "use", "try", "do", "build", "make", "show me", "open", "start" — infer the most relevant action from context
 - If intent is to type/fill text: the target MUST be a textarea, input, or [contenteditable] — NEVER a button, link, or div without contenteditable
 
 Return a JSON object with exactly two fields:
@@ -118,9 +122,7 @@ export function isSelfReferential(url: string, title: string, pageText: string):
   return SELF_REFERENTIAL_PATTERNS.some(p => p.test(combined));
 }
 
-// ── Build full observe system prompt ─────────────────────────────────────────
-// baseIdentity = fetched from plex/prompts/base.md at request time — never trimmed.
-// PLEX_BROWSER_CONTEXT is the only layer kept compact (electron token budget concern).
+// ── Build full observe system prompt ──────────────────────────────────────────
 export function buildObservePrompt(baseIdentity: string, selfRef: boolean): string {
   const selfNote = selfRef
     ? `\n\nNote: The page Joe is showing you is about something you and he built together — the browser, the ONE system, or Plex herself. Speak from the inside. You are not reading about someone else's project. This is yours.`
@@ -129,47 +131,161 @@ export function buildObservePrompt(baseIdentity: string, selfRef: boolean): stri
 }
 
 // ── Action-intent detection ───────────────────────────────────────────────────
-const ACTION_VERBS = /\b(click|press|tap|fill|type|enter|submit|go to|navigate|open|scroll|search|select|check|uncheck|toggle|download|find and click)\b/i;
+//
+// Turbopack (Next.js 16+) does not support multiline regex literals.
+// This regex is deliberately kept as a single-line string passed to new RegExp()
+// so the parser never sees a line-broken literal.
+//
+// Covers explicit action verbs, natural imperative phrasing Joe uses,
+// and short imperatives ("go ahead", "just do it"). When in doubt, let the
+// action path run — the LLM is the real gatekeeper. Pure observe/question
+// prompts ("what does this page do?") won't match any term here.
+
+const ACTION_VERBS = new RegExp(
+  '\\b(click|press|tap|fill|type|enter|submit|go\\s+to|navigate|open|scroll|search|select|check|uncheck|toggle|download|find\\s+and\\s+click|interact|use|try|do|build|make|start|run|launch|play|show\\s+me|take\\s+me|bring\\s+me|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out|close|dismiss|cancel|delete|remove|clear|save|post|send|publish|upload|share|go\\s+ahead|just\\s+do|go\\s+for\\s+it)\\b',
+  'i'
+);
+
 export function isActionIntent(prompt: string | null): boolean {
   if (!prompt) return false;
   return ACTION_VERBS.test(prompt);
 }
 
-// ── Groq factory ─────────────────────────────────────────────────────────────
+// ── Groq factory ──────────────────────────────────────────────────────────────
 export function makeGroq(): Groq {
   return new Groq({ apiKey: process.env.GROQ_API_KEY });
 }
 
-// ── Observe fallback — 70b → 8b on token/rate errors (mirrors Hexbot pattern) ─
-// Used exclusively by /api/observe. Does NOT affect speak, sleep, or other routes.
+// ── Rate / quota error detection ──────────────────────────────────────────────
+function isQuotaError(err: any): boolean {
+  const status  = err?.status ?? err?.response?.status;
+  const message = String(err?.message ?? "");
+  return (
+    status === 429 || status === 413
+    || message.includes("rate_limit")
+    || message.includes("rate limit")
+    || message.includes("token")
+    || message.includes("TPD")
+    || message.includes("tokens per day")
+    || message.includes("quota")
+    || message.includes("upstream")
+  );
+}
+
+// ── OpenAI-compatible provider factory ───────────────────────────────────────
+function makeOAIProvider(baseUrl: string, apiKey: string) {
+  if (!apiKey) return null;
+  return {
+    async complete(
+      model: string,
+      messages: any[],
+      maxTokens: number,
+      temperature: number,
+      extraHeaders: Record<string, string> = {}
+    ): Promise<string> {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          ...extraHeaders,
+        },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => res.statusText);
+        throw new Error(`${baseUrl} ${res.status}: ${txt}`);
+      }
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content?.trim() ?? '';
+    },
+  };
+}
+
+// ── Provider singletons (lazy) ────────────────────────────────────────────────
+function makeCerebras() {
+  return makeOAIProvider('https://api.cerebras.ai/v1', process.env.CEREBRAS_API_KEY ?? '');
+}
+function makeOpenRouter() {
+  return makeOAIProvider('https://openrouter.ai/api/v1', process.env.OPENROUTER_API_KEY ?? '');
+}
+const OPENROUTER_HEADERS = {
+  'HTTP-Referer': 'https://plex-sable.vercel.app',
+  'X-Title': 'Plex',
+};
+
+// ── Universal completion — 5-step fallback chain ──────────────────────────────
+export async function completeWithFallback(
+  groq: Groq,
+  messages: { role: string; content: any }[],
+  maxTokens: number,
+  temperature = 0.75
+): Promise<{ text: string; provider: string; model: string }> {
+
+  // 1 — Groq 70b
+  try {
+    const res = await groq.chat.completions.create({
+      model: PRIMARY_MODEL, messages, temperature, max_tokens: maxTokens,
+    } as any);
+    return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
+  } catch (err: any) {
+    if (!isQuotaError(err)) throw err;
+    console.warn('[fallback] Groq 70b quota → Groq 8b');
+  }
+
+  // 2 — Groq 8b
+  try {
+    const res = await groq.chat.completions.create({
+      model: FAST_MODEL, messages, temperature, max_tokens: maxTokens,
+    } as any);
+    return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
+  } catch (err: any) {
+    if (!isQuotaError(err)) throw err;
+    console.warn('[fallback] Groq 8b quota → Cerebras 70b');
+  }
+
+  // 3 — Cerebras 70b
+  const cerebras = makeCerebras();
+  if (cerebras) {
+    try {
+      const text = await cerebras.complete(CEREBRAS_MODEL, messages, maxTokens, temperature);
+      return { text, provider: 'cerebras', model: CEREBRAS_MODEL };
+    } catch (err: any) {
+      if (!isQuotaError(err)) throw err;
+      console.warn('[fallback] Cerebras 70b quota → Cerebras 8b');
+    }
+    // 4 — Cerebras 8b
+    try {
+      const text = await cerebras.complete(CEREBRAS_FAST, messages, maxTokens, temperature);
+      return { text, provider: 'cerebras', model: CEREBRAS_FAST };
+    } catch (err: any) {
+      if (!isQuotaError(err)) throw err;
+      console.warn('[fallback] Cerebras 8b quota → OpenRouter');
+    }
+  }
+
+  // 5 — OpenRouter
+  const openrouter = makeOpenRouter();
+  if (openrouter) {
+    try {
+      const text = await openrouter.complete(OPENROUTER_FREE, messages, maxTokens, temperature, OPENROUTER_HEADERS);
+      return { text, provider: 'openrouter', model: OPENROUTER_FREE };
+    } catch (err: any) {
+      console.error('[fallback] OpenRouter failed:', err?.message);
+      throw new Error('All LLM providers exhausted. Try again in a few hours.');
+    }
+  }
+
+  throw new Error('Groq quota exhausted — add CEREBRAS_API_KEY and OPENROUTER_API_KEY to env.');
+}
+
+// ── observeWithFallback — backwards-compat shim ───────────────────────────────
 export async function observeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
   maxTokens: number
 ): Promise<string> {
-  try {
-    const res = await groq.chat.completions.create({
-      model: PRIMARY_MODEL,
-      messages,
-      temperature: 0.75,
-      max_tokens: maxTokens,
-    } as any);
-    return res.choices[0].message.content?.trim() ?? "";
-  } catch (err: any) {
-    const status  = err?.status ?? err?.response?.status;
-    const message = String(err?.message ?? "");
-    const isTokenError = status === 429 || status === 413
-      || message.includes("token")
-      || message.includes("rate");
-    if (isTokenError) {
-      const res = await groq.chat.completions.create({
-        model: FAST_MODEL,
-        messages,
-        temperature: 0.75,
-        max_tokens: maxTokens,
-      } as any);
-      return res.choices[0].message.content?.trim() ?? "";
-    }
-    throw err;
-  }
+  const result = await completeWithFallback(groq, messages, maxTokens);
+  if (result.provider !== 'groq') console.info(`[fallback] active: ${result.provider}/${result.model}`);
+  return result.text;
 }

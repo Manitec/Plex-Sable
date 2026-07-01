@@ -7,11 +7,53 @@ import {
   makeGroq, buildObservePrompt, isSelfReferential,
   isActionIntent, PLEX_ACTION_PROMPT, PLEX_VISION_TONE,
   fetchBaseIdentity, PLEX_BROWSER_CONTEXT,
-  observeWithFallback, PRIMARY_MODEL,
+  observeWithFallback, completeWithFallback,
 } from "@/lib/plex-identity";
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
+}
+
+// ── SYN-E: question detection ─────────────────────────────────────────────────
+function isQuestion(prompt: string | null): boolean {
+  if (!prompt || prompt.trim().length < 8) return false;
+  const p = prompt.trim().toLowerCase();
+  if (p.endsWith("?")) return true;
+  if (/^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/.test(p)) return true;
+  return false;
+}
+
+// ── SYN-E ─────────────────────────────────────────────────────────────────────
+async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
+  try {
+    const srcRes = await fetch(`${baseUrl}/api/search`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: question, maxResults: 5 }),
+    });
+    const srcData = srcRes.ok ? await srcRes.json() : null;
+    const searchResults: string = srcData?.results
+      ? srcData.results.slice(0, 5)
+          .map((r: any, i: number) => `[${i + 1}] ${r.title}\n${r.snippet ?? ""}\n${r.url ?? ""}`)
+          .join("\n\n")
+      : "(no search results)";
+    const synRes = await fetch(`${baseUrl}/api/answer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, searchResults, pageContext, source: "electron" }),
+    });
+    const synData = synRes.ok ? await synRes.json() : null;
+    return synData?.answer ?? "(no answer)";
+  } catch (e: any) {
+    console.error("runSynE failed:", e?.message);
+    return "(search failed)";
+  }
+}
+
+function getBaseUrl(req: NextRequest): string {
+  const host = req.headers.get("host") ?? "localhost:3000";
+  const proto = host.startsWith("localhost") ? "http" : "https";
+  return `${proto}://${host}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -29,7 +71,6 @@ export async function POST(req: NextRequest) {
     let source = "bookmarklet";
     let sessionId = "joe";
     let silent = false;
-    let capabilities: string[] = [];
     let interactiveElements: object[] = [];
 
     if (isMultipart) {
@@ -46,26 +87,41 @@ export async function POST(req: NextRequest) {
       silent             = form.get("silent") === "true";
     } else {
       const body = await req.json();
+      // Note: capabilities field accepted but no longer used as a gate —
+      // action intent is determined purely by prompt content.
       ({ url, title, selectedText, pageText, prompt, imageUrl,
          source = "bookmarklet", sessionId = "joe", silent = false,
-         capabilities = [], interactiveElements = [] } = body);
+         interactiveElements = [] } = body);
     }
 
-    const hasImage = !!(imageUrl || imageFile);
-    const canAct   = Array.isArray(capabilities) && capabilities.length > 0;
+    const hasImage     = !!(imageUrl || imageFile);
+    const fromPE       = source === "plex-electron";
+    // Action path: PE is always capable. For bookmarklet, only act if elements were sent.
+    const canAct       = fromPE || interactiveElements.length > 0;
+    const shouldSearch = fromPE && isQuestion(prompt);
 
     if (!hasImage && !url) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
     }
 
-    // Fetch base identity from plex/prompts/base.md — never trimmed, always full
     const baseIdentity = await fetchBaseIdentity();
-
-    const groq    = makeGroq();
+    const groq = makeGroq();
     let response  = "";
     let actions: object[] = [];
+    let synEAnswer: string | null = null;
 
-    // ── VISION PATH ───────────────────────────────────────────────────────────────────
+    // ── SYN-E ─────────────────────────────────────────────────────────────────
+    let synEPromise: Promise<string> | null = null;
+    if (shouldSearch && prompt) {
+      const pageContext = [
+        title    ? `Page: ${title}` : "",
+        url      ? `URL: ${url}` : "",
+        pageText ? `Page excerpt:\n${pageText.slice(0, 800)}` : "",
+      ].filter(Boolean).join("\n");
+      synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
+    }
+
+    // ── VISION PATH ───────────────────────────────────────────────────────────
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -76,25 +132,34 @@ export async function POST(req: NextRequest) {
       } else {
         imageContent = { type: "image_url", image_url: { url: imageUrl! } };
       }
-
       const userText     = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
       const visionPrompt = `${baseIdentity}${PLEX_BROWSER_CONTEXT}${PLEX_VISION_TONE}`;
+      try {
+        const completion = await groq.chat.completions.create({
+          model: VISION_MODEL,
+          messages: [
+            { role: "user",      content: visionPrompt },
+            { role: "assistant", content: "Understood. I am seeing." },
+            { role: "user",      content: [imageContent, { type: "text", text: userText }] },
+          ],
+          max_tokens: 1024,
+        } as any);
+        response = completion.choices[0].message.content?.trim() ?? "";
+      } catch (err: any) {
+        const msg = String(err?.message ?? "");
+        const isQuota = err?.status === 429 || msg.includes("rate_limit") || msg.includes("TPD") || msg.includes("quota");
+        if (isQuota) {
+          response = "I'm at my vision limit right now — Groq's daily token cap. Try again in about an hour.";
+          console.warn('[vision] Groq quota — graceful fallback message');
+        } else { throw err; }
+      }
 
-      const completion = await groq.chat.completions.create({
-        model: VISION_MODEL,
-        messages: [
-          { role: "user",      content: visionPrompt },
-          { role: "assistant", content: "Understood. I am seeing." },
-          { role: "user",      content: [imageContent, { type: "text", text: userText }] },
-        ],
-        max_tokens: 1024,
-      } as any);
-      response = completion.choices[0].message.content?.trim() ?? "";
-
-    // ── ACTION PATH ──────────────────────────────────────────────────────────────────
+    // ── ACTION PATH ───────────────────────────────────────────────────────────
+    // Gate: prompt has action intent AND we're in a context where we can act.
+    // canAct is true whenever source === 'plex-electron' (PE always sends elements).
     } else if (canAct && isActionIntent(prompt)) {
       const elementsBlock = interactiveElements.length
-        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — use these for selectors):\n${JSON.stringify(interactiveElements, null, 2)}`
+        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM):\n${JSON.stringify(interactiveElements, null, 2)}`
         : "\n\n(No interactive elements list provided — infer selectors from page text.)";
 
       const pageContext = [
@@ -105,18 +170,16 @@ export async function POST(req: NextRequest) {
 
       const userMessage = `Joe's instruction: ${prompt}${elementsBlock}\n\nPage context:\n${pageContext}`;
 
-      const completion = await groq.chat.completions.create({
-        model: PRIMARY_MODEL,
-        messages: [
+      const { text: raw } = await completeWithFallback(
+        groq,
+        [
           { role: "system", content: PLEX_ACTION_PROMPT },
           { role: "user",   content: userMessage },
         ],
-        temperature: 0.2,
-        max_tokens: 512,
-        response_format: { type: "json_object" },
-      } as any);
+        512,
+        0.2
+      );
 
-      const raw = completion.choices[0].message.content?.trim() ?? "{}";
       try {
         const parsed = JSON.parse(raw);
         response = parsed.response ?? "I'll take care of that.";
@@ -126,7 +189,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH — uses fallback (70b → 8b on token/rate errors) ───────────────────
+    // ── OBSERVE PATH ──────────────────────────────────────────────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
@@ -151,7 +214,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── LOG ────────────────────────────────────────────────────────────────────────
+    // ── Resolve SYN-E ─────────────────────────────────────────────────────────
+    if (synEPromise) {
+      synEAnswer = await synEPromise;
+      if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
+        response = synEAnswer + (response ? `\n\n---\n${response}` : "");
+      }
+    }
+
+    // ── LOG ───────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -162,27 +233,30 @@ export async function POST(req: NextRequest) {
       hasImage,
       source,
       sessionId,
+      synE:         synEAnswer ?? null,
       createdAt: FieldValue.serverTimestamp(),
       response:  silent ? null : response,
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ───────────────────────────────────────────────────────────────────
+    // ── SEDIMENT ──────────────────────────────────────────────────────────────
     if (!silent) {
       const sedimentNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
         : actions.length
           ? `Joe told Plex to act on "${title ?? url}": ${prompt?.slice(0, 80)}`
-          : selectedText
-            ? `Joe was reading "${title ?? url}" and highlighted: "${selectedText.slice(0, 120)}"`
-            : `Joe was looking at: ${title ?? url} (${url})`;
+          : shouldSearch
+            ? `Joe asked Plex (browsing): "${prompt?.slice(0, 120)}" — Plex searched and answered`
+            : selectedText
+              ? `Joe was reading "${title ?? url}" and highlighted: "${selectedText.slice(0, 120)}"`
+              : `Joe was looking at: ${title ?? url} (${url})`;
 
       appendSediment({ mode: "observe", state: "present", note: sedimentNote })
         .catch((err: any) => console.error("observe appendSediment failed:", err?.message));
     }
 
     return NextResponse.json(
-      { observed: true, id: obsRef.id, response: silent ? null : response, actions },
+      { observed: true, id: obsRef.id, response: silent ? null : response, actions, synE: synEAnswer ?? null },
       { headers: CORS }
     );
 
