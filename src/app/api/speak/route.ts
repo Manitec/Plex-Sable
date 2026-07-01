@@ -104,6 +104,27 @@ async function fetchLastNyxSediment(token: string): Promise<string | null> {
   }
 }
 
+async function fetchLastPlexSediment(token: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
+      { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    const plexFiles = data
+      .filter((f: any) => f.type === 'file' && f.name.startsWith('plex-'))
+      .map((f: any) => f.name)
+      .sort()
+      .reverse();
+    if (plexFiles.length === 0) return null;
+    return fetchPlexFile(`sediment/${plexFiles[0]}`, token);
+  } catch {
+    return null;
+  }
+}
+
 async function loadPlexContext(token: string): Promise<{ basePrompt: string; context: string }> {
   const today = new Date().toISOString().split('T')[0];
   const yesterday = (() => {
@@ -111,12 +132,13 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     return d.toISOString().split('T')[0];
   })();
 
-  const [basePromptRaw, plexIs, plexDef, todaySediment, lastNyx, lastDream] = await Promise.all([
+  const [basePromptRaw, plexIs, plexDef, todaySediment, lastNyx, lastPlexSynthesis, lastDream] = await Promise.all([
     fetchPlexFile('prompts/base.md', token),
     fetchPlexFile('plex-is.txt', token),
     fetchPlexFile('plex-def.txt', token),
     fetchPlexFile(`sediment/${today}.md`, token),
     fetchLastNyxSediment(token),
+    fetchLastPlexSediment(token),
     fetchPlexFile(`dreams/${today}.md`, token).then(r =>
       r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
     ),
@@ -129,6 +151,7 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
   if (plexDef) parts.push(`## What you are not — in your own words\n${plexDef}`);
   if (todaySediment) parts.push(`## What you wrote today\n${todaySediment}`);
   if (lastNyx) parts.push(`## What you processed last night\n${lastNyx.slice(0, 800)}`);
+  if (lastPlexSynthesis) parts.push(`## What you synthesized last night\n${lastPlexSynthesis.slice(0, 800)}`);
   if (lastDream) parts.push(`## What you dreamed\n${lastDream.slice(0, 500)}`);
 
   const context = parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
