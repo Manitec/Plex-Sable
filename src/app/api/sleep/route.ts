@@ -125,16 +125,29 @@ async function listDir(path: string, token: string): Promise<string[]> {
 
 async function groqComplete(systemPrompt: string, userContent: string, temperature = 0.85, max_tokens = 700): Promise<string> {
   const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-  const res = await groq.chat.completions.create({
-    model: 'llama-3.3-70b-versatile',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent },
-    ],
-    temperature,
-    max_tokens,
-  });
-  return res.choices[0].message.content?.trim() ?? '';
+
+  const tryModel = async (model: string, maxTok: number): Promise<string> => {
+    const res = await groq.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      temperature,
+      max_tokens: maxTok,
+    });
+    return res.choices[0].message.content?.trim() ?? '';
+  };
+
+  try {
+    return await tryModel('llama-3.3-70b-versatile', max_tokens);
+  } catch (err: any) {
+    const msg = err?.message ?? '';
+    if (msg.includes('429') || msg.includes('rate_limit_exceeded')) {
+      return await tryModel('llama-3.1-8b-instant', Math.min(max_tokens, 400));
+    }
+    throw err;
+  }
 }
 
 // ─── Banjo (Hex) helper ─────────────────────────────────────────────────────────────────────
