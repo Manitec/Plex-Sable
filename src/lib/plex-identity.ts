@@ -132,27 +132,19 @@ export function buildObservePrompt(baseIdentity: string, selfRef: boolean): stri
 
 // ── Action-intent detection ───────────────────────────────────────────────────
 //
-// Broad intentional-language detection. Covers:
-//   • Explicit action verbs (click, fill, type, scroll, navigate…)
-//   • Natural imperative phrasing Joe actually uses:
-//     interact, use, try, do, build, make, show me, open, start, go, run,
-//     log in, sign up, close, delete, save, post, send, submit, press
-//   • Short imperatives without a matching verb: "just do it", "go ahead"
+// Turbopack (Next.js 16+) does not support multiline regex literals.
+// This regex is deliberately kept as a single-line string passed to new RegExp()
+// so the parser never sees a line-broken literal.
 //
-// When in doubt, let the action path run — the LLM is the real gatekeeper.
-// The only prompts that should NOT trigger action are pure observe/question prompts
-// ("what does this page do?", "who made this?") — those don't match any verb here.
+// Covers explicit action verbs, natural imperative phrasing Joe uses,
+// and short imperatives ("go ahead", "just do it"). When in doubt, let the
+// action path run — the LLM is the real gatekeeper. Pure observe/question
+// prompts ("what does this page do?") won't match any term here.
 
-const ACTION_VERBS = /\b(
-  click|press|tap|fill|type|enter|submit|go\s+to|navigate|open|scroll|
-  search|select|check|uncheck|toggle|download|find\s+and\s+click|
-  interact|use|try|do|build|make|start|run|launch|play|
-  show\s+me|take\s+me|bring\s+me|
-  log\s*in|sign\s*in|sign\s*up|log\s*out|
-  close|dismiss|cancel|delete|remove|clear|
-  save|post|send|publish|upload|share|
-  go\s+ahead|just\s+do|go\s+for\s+it
-)\b/ix;
+const ACTION_VERBS = new RegExp(
+  '\\b(click|press|tap|fill|type|enter|submit|go\\s+to|navigate|open|scroll|search|select|check|uncheck|toggle|download|find\\s+and\\s+click|interact|use|try|do|build|make|start|run|launch|play|show\\s+me|take\\s+me|bring\\s+me|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out|close|dismiss|cancel|delete|remove|clear|save|post|send|publish|upload|share|go\\s+ahead|just\\s+do|go\\s+for\\s+it)\\b',
+  'i'
+);
 
 export function isActionIntent(prompt: string | null): boolean {
   if (!prompt) return false;
