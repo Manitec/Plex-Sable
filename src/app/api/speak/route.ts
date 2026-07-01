@@ -309,6 +309,28 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
         required: ["request"]
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_one_requests",
+      description: "Read your own pending and recent requests from the ONE request queue. Use this to check what you've asked for and whether Joe has responded. You can filter by status. Use when you want to know the status of something you submitted, or when Joe asks about your requests.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            description: "Optional status filter. One of: 'pending', 'acknowledged', 'in-progress', 'done', 'deferred'. Omit to get the most recent requests across all statuses.",
+            enum: ["pending", "acknowledged", "in-progress", "done", "deferred"]
+          },
+          limit: {
+            type: "number",
+            description: "How many requests to return. Defaults to 10. Max 25."
+          }
+        },
+        required: []
+      }
+    }
   }
 ];
 
@@ -463,6 +485,36 @@ async function callGroqWithTools(
         });
         requestSubmitted = args.request;
         result = "Request submitted to ONE queue. Joe will see it in the dashboard.";
+      } else if (fnName === "read_one_requests") {
+        try {
+          const db = getAdminDb();
+          let query: FirebaseFirestore.Query = db.collection('one_requests')
+            .where('source', '==', 'plex')
+            .orderBy('createdAt', 'desc')
+            .limit(Math.min(args.limit ?? 10, 25));
+          if (args.status) {
+            query = db.collection('one_requests')
+              .where('source', '==', 'plex')
+              .where('status', '==', args.status)
+              .orderBy('createdAt', 'desc')
+              .limit(Math.min(args.limit ?? 10, 25));
+          }
+          const snap = await query.get();
+          if (snap.empty) {
+            result = args.status
+              ? `No requests found with status "${args.status}".`
+              : "No requests found in the ONE queue.";
+          } else {
+            const rows = snap.docs.map(doc => {
+              const d = doc.data();
+              const ts = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0, 10) ?? 'unknown date';
+              return `[${d.status}] ${ts} — ${d.request}${d.notes ? ` (${d.notes})` : ''}`;
+            });
+            result = rows.join('\n');
+          }
+        } catch (e: any) {
+          result = `Could not read ONE requests: ${e?.message ?? 'unknown error'}`;
+        }
       } else {
         result = "Unknown tool.";
       }
