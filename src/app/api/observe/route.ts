@@ -3,10 +3,11 @@ import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { appendSediment } from "@/lib/github";
 import {
-  CORS, PRIMARY_MODEL, VISION_MODEL,
+  CORS, VISION_MODEL,
   makeGroq, buildObservePrompt, isSelfReferential,
   isActionIntent, PLEX_ACTION_PROMPT, PLEX_VISION_TONE,
   fetchBaseIdentity, PLEX_BROWSER_CONTEXT,
+  observeWithFallback, PRIMARY_MODEL,
 } from "@/lib/plex-identity";
 
 export async function OPTIONS() {
@@ -57,14 +58,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
     }
 
-    // Fetch base identity from plex/prompts/base.md — single source of truth
+    // Fetch base identity from plex/prompts/base.md — never trimmed, always full
     const baseIdentity = await fetchBaseIdentity();
 
     const groq    = makeGroq();
     let response  = "";
     let actions: object[] = [];
 
-    // ── VISION PATH ──────────────────────────────────────────────────────────
+    // ── VISION PATH ───────────────────────────────────────────────────────────────────
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -87,10 +88,10 @@ export async function POST(req: NextRequest) {
           { role: "user",      content: [imageContent, { type: "text", text: userText }] },
         ],
         max_tokens: 1024,
-      });
+      } as any);
       response = completion.choices[0].message.content?.trim() ?? "";
 
-    // ── ACTION PATH ──────────────────────────────────────────────────────────
+    // ── ACTION PATH ──────────────────────────────────────────────────────────────────
     } else if (canAct && isActionIntent(prompt)) {
       const elementsBlock = interactiveElements.length
         ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — use these for selectors):\n${JSON.stringify(interactiveElements, null, 2)}`
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
         temperature: 0.2,
         max_tokens: 512,
         response_format: { type: "json_object" },
-      });
+      } as any);
 
       const raw = completion.choices[0].message.content?.trim() ?? "{}";
       try {
@@ -125,7 +126,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH ─────────────────────────────────────────────────────────
+    // ── OBSERVE PATH — uses fallback (70b → 8b on token/rate errors) ───────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
@@ -139,20 +140,18 @@ export async function POST(req: NextRequest) {
       const context = contextParts.join("\n");
 
       if (!silent) {
-        const completion = await groq.chat.completions.create({
-          model: PRIMARY_MODEL,
-          messages: [
+        response = await observeWithFallback(
+          groq,
+          [
             { role: "system", content: systemPrompt },
             { role: "user",   content: context },
           ],
-          temperature: 0.75,
-          max_tokens: 220,
-        });
-        response = completion.choices[0].message.content?.trim() ?? "";
+          220
+        );
       }
     }
 
-    // ── LOG ──────────────────────────────────────────────────────────────────
+    // ── LOG ────────────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -168,7 +167,7 @@ export async function POST(req: NextRequest) {
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ─────────────────────────────────────────────────────────────
+    // ── SEDIMENT ───────────────────────────────────────────────────────────────────
     if (!silent) {
       const sedimentNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
