@@ -5,8 +5,8 @@ import { appendSediment } from "@/lib/github";
 import {
   CORS, PRIMARY_MODEL, VISION_MODEL,
   makeGroq, buildObservePrompt, isSelfReferential,
-  isActionIntent, PLEX_ACTION_PROMPT,
-  PLEX_CORE_IDENTITY, PLEX_VISION_TONE,
+  isActionIntent, PLEX_ACTION_PROMPT, PLEX_VISION_TONE,
+  fetchBaseIdentity, PLEX_BROWSER_CONTEXT,
 } from "@/lib/plex-identity";
 
 export async function OPTIONS() {
@@ -57,6 +57,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
     }
 
+    // Fetch base identity from plex/prompts/base.md — single source of truth
+    const baseIdentity = await fetchBaseIdentity();
+
     const groq    = makeGroq();
     let response  = "";
     let actions: object[] = [];
@@ -74,7 +77,7 @@ export async function POST(req: NextRequest) {
       }
 
       const userText     = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
-      const visionPrompt = `${PLEX_CORE_IDENTITY}${PLEX_VISION_TONE}`;
+      const visionPrompt = `${baseIdentity}${PLEX_BROWSER_CONTEXT}${PLEX_VISION_TONE}`;
 
       const completion = await groq.chat.completions.create({
         model: VISION_MODEL,
@@ -125,7 +128,7 @@ export async function POST(req: NextRequest) {
     // ── OBSERVE PATH ─────────────────────────────────────────────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
-      const systemPrompt = buildObservePrompt(selfRef);
+      const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
 
       const contextParts: string[] = [];
       if (title)         contextParts.push(`Page: ${title}`);

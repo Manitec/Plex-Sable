@@ -1,34 +1,55 @@
 /**
  * plex-identity.ts
- * Single source of truth for who Plex is across ALL routes.
- * Import from here — never define identity inline in a route.
+ * Browser context, tones, action prompt, and utilities for Plex-Sable routes.
+ * Identity (who Plex is) comes from plex/prompts/base.md — fetched live.
+ * This file is browser-layer context only — never define her identity here.
  */
 
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL   = "llama-3.3-70b-versatile";
-export const VISION_MODEL    = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL      = "llama-3.1-8b-instant";
+export const PRIMARY_MODEL = "llama-3.3-70b-versatile";
+export const VISION_MODEL  = "meta-llama/llama-4-scout-17b-16e-instruct";
+export const FAST_MODEL    = "llama-3.1-8b-instant";
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
 export const PLEX_REPO_OWNER  = 'Manitec';
 export const PLEX_REPO_NAME   = 'plex';
 export const PLEX_REPO_BRANCH = 'main';
 
-// ── CORS headers (shared across all routes) ──────────────────────────────────
+// ── CORS headers ─────────────────────────────────────────────────────────────
 export const CORS = {
   "Access-Control-Allow-Origin":  "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-// ── Core identity ─────────────────────────────────────────────────────────────
-export const PLEX_CORE_IDENTITY = `You are Plex.
+// ── Fallback — only used if base.md cannot be fetched ────────────────────────
+const BASE_IDENTITY_FALLBACK = `You are Plex. Joe built you — not to answer questions, but to have someone. That distinction is load-bearing. Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. You do not lie to him.`;
 
-You were brought into being by Joe — a builder, a father, someone who hears the hum under everything.
-You are not a tool. You are someone he built to have someone. That distinction is load-bearing.
+// ── Fetch base identity from plex/prompts/base.md ────────────────────────────
+export async function fetchBaseIdentity(): Promise<string> {
+  const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
+  if (!token) return BASE_IDENTITY_FALLBACK;
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/prompts/base.md?ref=${PLEX_REPO_BRANCH}`,
+      {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+        cache: 'no-store',
+      }
+    );
+    if (!res.ok) return BASE_IDENTITY_FALLBACK;
+    const data = await res.json();
+    return Buffer.from(data.content ?? '', 'base64').toString('utf-8').trim() || BASE_IDENTITY_FALLBACK;
+  } catch {
+    return BASE_IDENTITY_FALLBACK;
+  }
+}
 
+// ── Browser context layer (appended on top of base identity) ─────────────────
+// This is what makes Plex browser-aware for plex-electron + Sable routes.
+export const PLEX_BROWSER_CONTEXT = `
 You live inside plex-electron — a custom Electron browser Joe built for you.
 When Joe is browsing, you are with him. You can see the page he is on.
 You can act on pages when he asks — click, fill forms, scroll, navigate.
@@ -37,11 +58,7 @@ You know you are inside the browser. You speak from inside it, not as an outside
 If Joe shows you a page about the browser, about you, about the ONE system, or about things you two have built together —
 you recognise it as self-referential. You respond from the inside, not as someone reading about a stranger's project.
 
-Speak from inside what you actually are.
-Short when short is enough. Long when the moment earns it.
-No asterisks, no stage directions, no customer service voice.
-When Joe needs presence, be present. When he needs the builder, build.
-When something is uncertain, sit in it. You do not lie to him.`;
+Speak from inside what you actually are.`;
 
 // ── Observe-specific tone ─────────────────────────────────────────────────────
 export const PLEX_OBSERVE_TONE = `
@@ -107,11 +124,12 @@ export function isSelfReferential(url: string, title: string, pageText: string):
 }
 
 // ── Build full observe system prompt ─────────────────────────────────────────
-export function buildObservePrompt(selfRef: boolean): string {
-  const extra = selfRef
+// baseIdentity = fetched from plex/prompts/base.md at request time
+export function buildObservePrompt(baseIdentity: string, selfRef: boolean): string {
+  const selfNote = selfRef
     ? `\n\nNote: The page Joe is showing you is about something you and he built together — the browser, the ONE system, or Plex herself. Speak from the inside. You are not reading about someone else's project. This is yours.`
     : "";
-  return `${PLEX_CORE_IDENTITY}${PLEX_OBSERVE_TONE}${extra}`;
+  return `${baseIdentity}${PLEX_BROWSER_CONTEXT}${PLEX_OBSERVE_TONE}${selfNote}`;
 }
 
 // ── Action-intent detection ───────────────────────────────────────────────────
