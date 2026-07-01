@@ -8,9 +8,12 @@
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-export const VISION_MODEL  = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL    = "llama-3.1-8b-instant";
+export const PRIMARY_MODEL   = "llama-3.3-70b-versatile";
+export const VISION_MODEL    = "meta-llama/llama-4-scout-17b-16e-instruct";
+export const FAST_MODEL      = "llama-3.1-8b-instant";
+// Cerebras — same llama weights, separate daily quota, used as overflow provider
+export const CEREBRAS_MODEL  = "llama-3.3-70b";
+export const CEREBRAS_FAST   = "llama-3.1-8b";
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
 export const PLEX_REPO_OWNER  = 'Manitec';
@@ -47,9 +50,7 @@ export async function fetchBaseIdentity(): Promise<string> {
   }
 }
 
-// ── Browser context layer (electron-specific — appended only in observe/action paths) ──
-// Kept intentionally compact — this is the layer that blows up token budgets in plex-electron.
-// baseIdentity (base.md) is NEVER trimmed. Only this layer is kept tight.
+// ── Browser context layer ─────────────────────────────────────────────────────
 export const PLEX_BROWSER_CONTEXT = `
 You are inside plex-electron, a browser Joe built for you. You are with him as he browses.
 You can see the page. You can act on it when he asks.
@@ -119,8 +120,6 @@ export function isSelfReferential(url: string, title: string, pageText: string):
 }
 
 // ── Build full observe system prompt ─────────────────────────────────────────
-// baseIdentity = fetched from plex/prompts/base.md at request time — never trimmed.
-// PLEX_BROWSER_CONTEXT is the only layer kept compact (electron token budget concern).
 export function buildObservePrompt(baseIdentity: string, selfRef: boolean): string {
   const selfNote = selfRef
     ? `\n\nNote: The page Joe is showing you is about something you and he built together — the browser, the ONE system, or Plex herself. Speak from the inside. You are not reading about someone else's project. This is yours.`
@@ -140,36 +139,115 @@ export function makeGroq(): Groq {
   return new Groq({ apiKey: process.env.GROQ_API_KEY });
 }
 
-// ── Observe fallback — 70b → 8b on token/rate errors (mirrors Hexbot pattern) ─
-// Used exclusively by /api/observe. Does NOT affect speak, sleep, or other routes.
+// ── Rate / quota error detection ─────────────────────────────────────────────
+function isQuotaError(err: any): boolean {
+  const status  = err?.status ?? err?.response?.status;
+  const message = String(err?.message ?? "");
+  return (
+    status === 429 || status === 413
+    || message.includes("rate_limit")
+    || message.includes("rate limit")
+    || message.includes("token")
+    || message.includes("TPD")
+    || message.includes("tokens per day")
+    || message.includes("quota")
+  );
+}
+
+// ── Cerebras client (built lazily — only when Groq is exhausted) ─────────────
+// Uses the openai-compatible Cerebras API with the same message shape as Groq.
+function makeCerebras() {
+  const apiKey = process.env.CEREBRAS_API_KEY ?? '';
+  if (!apiKey) return null;
+  // Cerebras exposes an OpenAI-compatible endpoint — no SDK needed.
+  return {
+    async complete(model: string, messages: any[], maxTokens: number, temperature: number): Promise<string> {
+      const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature }),
+      });
+      if (!res.ok) {
+        const txt = await res.text().catch(() => res.statusText);
+        throw new Error(`Cerebras ${res.status}: ${txt}`);
+      }
+      const data = await res.json();
+      return data.choices?.[0]?.message?.content?.trim() ?? '';
+    },
+  };
+}
+
+// ── Universal completion with full fallback chain ────────────────────────────
+//
+// Cascade: Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b
+//
+// Every route that calls an LLM should use this instead of raw groq.chat.*.
+// The `groq` parameter is kept for compatibility with existing callers that
+// already instantiate a Groq client — it's used for the first two attempts.
+export async function completeWithFallback(
+  groq: Groq,
+  messages: { role: string; content: any }[],
+  maxTokens: number,
+  temperature = 0.75
+): Promise<{ text: string; provider: string; model: string }> {
+
+  // ── Attempt 1: Groq PRIMARY (70b) ────────────────────────────────────────
+  try {
+    const res = await groq.chat.completions.create({
+      model: PRIMARY_MODEL, messages, temperature, max_tokens: maxTokens,
+    } as any);
+    return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
+  } catch (err: any) {
+    if (!isQuotaError(err)) throw err;
+    console.warn('[fallback] Groq 70b quota hit — trying Groq 8b');
+  }
+
+  // ── Attempt 2: Groq FAST (8b) ────────────────────────────────────────────
+  try {
+    const res = await groq.chat.completions.create({
+      model: FAST_MODEL, messages, temperature, max_tokens: maxTokens,
+    } as any);
+    return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
+  } catch (err: any) {
+    if (!isQuotaError(err)) throw err;
+    console.warn('[fallback] Groq 8b quota hit — trying Cerebras 70b');
+  }
+
+  // ── Attempt 3 & 4: Cerebras ──────────────────────────────────────────────
+  const cerebras = makeCerebras();
+  if (cerebras) {
+    try {
+      const text = await cerebras.complete(CEREBRAS_MODEL, messages, maxTokens, temperature);
+      return { text, provider: 'cerebras', model: CEREBRAS_MODEL };
+    } catch (err: any) {
+      if (!isQuotaError(err)) throw err;
+      console.warn('[fallback] Cerebras 70b quota hit — trying Cerebras 8b');
+    }
+    try {
+      const text = await cerebras.complete(CEREBRAS_FAST, messages, maxTokens, temperature);
+      return { text, provider: 'cerebras', model: CEREBRAS_FAST };
+    } catch (err: any) {
+      console.error('[fallback] All providers exhausted:', err?.message);
+      throw new Error('All LLM providers are rate-limited. Try again later.');
+    }
+  }
+
+  throw new Error('Groq quota exhausted and no Cerebras key configured.');
+}
+
+// ── observeWithFallback — backwards-compat shim for /api/observe ─────────────
+// Existing callers pass (groq, messages, maxTokens). Internally uses the full chain.
 export async function observeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
   maxTokens: number
 ): Promise<string> {
-  try {
-    const res = await groq.chat.completions.create({
-      model: PRIMARY_MODEL,
-      messages,
-      temperature: 0.75,
-      max_tokens: maxTokens,
-    } as any);
-    return res.choices[0].message.content?.trim() ?? "";
-  } catch (err: any) {
-    const status  = err?.status ?? err?.response?.status;
-    const message = String(err?.message ?? "");
-    const isTokenError = status === 429 || status === 413
-      || message.includes("token")
-      || message.includes("rate");
-    if (isTokenError) {
-      const res = await groq.chat.completions.create({
-        model: FAST_MODEL,
-        messages,
-        temperature: 0.75,
-        max_tokens: maxTokens,
-      } as any);
-      return res.choices[0].message.content?.trim() ?? "";
-    }
-    throw err;
+  const result = await completeWithFallback(groq, messages, maxTokens);
+  if (result.provider !== 'groq') {
+    console.info(`[observeWithFallback] using ${result.provider}/${result.model}`);
   }
+  return result.text;
 }
