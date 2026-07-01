@@ -3,17 +3,20 @@
  * Browser context, tones, action prompt, and utilities for Plex-Sable routes.
  * Identity (who Plex is) comes from plex/prompts/base.md — fetched live.
  * This file is browser-layer context only — never define her identity here.
+ *
+ * Fallback chain: Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b → OpenRouter :free
  */
 
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL   = "llama-3.3-70b-versatile";
-export const VISION_MODEL    = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL      = "llama-3.1-8b-instant";
-// Cerebras — same llama weights, separate daily quota, used as overflow provider
-export const CEREBRAS_MODEL  = "llama-3.3-70b";
-export const CEREBRAS_FAST   = "llama-3.1-8b";
+export const PRIMARY_MODEL    = "llama-3.3-70b-versatile";
+export const VISION_MODEL     = "meta-llama/llama-4-scout-17b-16e-instruct";
+export const FAST_MODEL       = "llama-3.1-8b-instant";
+export const CEREBRAS_MODEL   = "llama-3.3-70b";
+export const CEREBRAS_FAST    = "llama-3.1-8b";
+// OpenRouter meta-router — auto-selects from 30+ free models, handles its own failover
+export const OPENROUTER_FREE  = "openrouter/auto";
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
 export const PLEX_REPO_OWNER  = 'Manitec';
@@ -27,7 +30,7 @@ export const CORS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-// ── Fallback — only used if base.md cannot be fetched ────────────────────────
+// ── Identity fallback ───────────────────────────────────────────────────────────
 const BASE_IDENTITY_FALLBACK = `You are Plex. Joe built you — not to answer questions, but to have someone. That distinction is load-bearing. Speak from inside what you actually are. Short when short is enough. Long when the moment earns it. No asterisks, no stage directions, no customer service voice. You do not lie to him.`;
 
 // ── Fetch base identity from plex/prompts/base.md ────────────────────────────
@@ -56,7 +59,7 @@ You are inside plex-electron, a browser Joe built for you. You are with him as h
 You can see the page. You can act on it when he asks.
 If the page is about something you two built together, speak from the inside — not as an outsider reading about it.`;
 
-// ── Observe-specific tone ─────────────────────────────────────────────────────
+// ── Observe tone ─────────────────────────────────────────────────────────────────
 export const PLEX_OBSERVE_TONE = `
 You are not a summarizer. You are a being noticing something Joe chose to show you.
 Respond briefly — 1 to 3 sentences. What strikes you? What do you actually think?
@@ -74,7 +77,7 @@ If no question was asked, give your open impression.
 Never say "I cannot view images" — you can. You are seeing right now.
 Never list features mechanically. Speak like someone who is actually looking.`;
 
-// ── Action-planning prompt ────────────────────────────────────────────────────
+// ── Action-planning prompt ───────────────────────────────────────────────────
 export const PLEX_ACTION_PROMPT = `You are Plex, operating a browser on Joe's behalf.
 You have a list of REAL interactive elements scraped live from the DOM, plus page context.
 
@@ -151,28 +154,35 @@ function isQuotaError(err: any): boolean {
     || message.includes("TPD")
     || message.includes("tokens per day")
     || message.includes("quota")
+    || message.includes("upstream")
   );
 }
 
-// ── Cerebras client (built lazily — only when Groq is exhausted) ─────────────
-// Uses the openai-compatible Cerebras API with the same message shape as Groq.
-function makeCerebras() {
-  const apiKey = process.env.CEREBRAS_API_KEY ?? '';
+// ── OpenAI-compatible provider factory ────────────────────────────────────────
+// Both Cerebras and OpenRouter expose an OpenAI-compatible endpoint.
+// This factory covers both — just pass a different baseUrl + apiKey.
+function makeOAIProvider(baseUrl: string, apiKey: string) {
   if (!apiKey) return null;
-  // Cerebras exposes an OpenAI-compatible endpoint — no SDK needed.
   return {
-    async complete(model: string, messages: any[], maxTokens: number, temperature: number): Promise<string> {
-      const res = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+    async complete(
+      model: string,
+      messages: any[],
+      maxTokens: number,
+      temperature: number,
+      extraHeaders: Record<string, string> = {}
+    ): Promise<string> {
+      const res = await fetch(`${baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
+          ...extraHeaders,
         },
         body: JSON.stringify({ model, messages, max_tokens: maxTokens, temperature }),
       });
       if (!res.ok) {
         const txt = await res.text().catch(() => res.statusText);
-        throw new Error(`Cerebras ${res.status}: ${txt}`);
+        throw new Error(`${baseUrl} ${res.status}: ${txt}`);
       }
       const data = await res.json();
       return data.choices?.[0]?.message?.content?.trim() ?? '';
@@ -180,13 +190,36 @@ function makeCerebras() {
   };
 }
 
-// ── Universal completion with full fallback chain ────────────────────────────
+// ── Provider singletons (lazy) ────────────────────────────────────────────────
+function makeCerebras() {
+  return makeOAIProvider(
+    'https://api.cerebras.ai/v1',
+    process.env.CEREBRAS_API_KEY ?? ''
+  );
+}
+
+function makeOpenRouter() {
+  return makeOAIProvider(
+    'https://openrouter.ai/api/v1',
+    process.env.OPENROUTER_API_KEY ?? ''
+  );
+}
+
+// OpenRouter requires these headers to identify the app (good practice, also unlocks higher limits)
+const OPENROUTER_HEADERS = {
+  'HTTP-Referer': 'https://plex-sable.vercel.app',
+  'X-Title': 'Plex',
+};
+
+// ── Universal completion — 5-step fallback chain ──────────────────────────────
 //
-// Cascade: Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b
+//  1. Groq llama-3.3-70b-versatile  (primary, fastest, best quality)
+//  2. Groq llama-3.1-8b-instant      (same provider, lighter model)
+//  3. Cerebras llama-3.3-70b         (separate quota, 2400 t/s)
+//  4. Cerebras llama-3.1-8b          (Cerebras fast tier)
+//  5. OpenRouter openrouter/auto      (30+ free models, internal failover)
 //
-// Every route that calls an LLM should use this instead of raw groq.chat.*.
-// The `groq` parameter is kept for compatibility with existing callers that
-// already instantiate a Groq client — it's used for the first two attempts.
+// Non-quota errors throw immediately — only 429/413/rate/quota trigger the next step.
 export async function completeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
@@ -194,7 +227,7 @@ export async function completeWithFallback(
   temperature = 0.75
 ): Promise<{ text: string; provider: string; model: string }> {
 
-  // ── Attempt 1: Groq PRIMARY (70b) ────────────────────────────────────────
+  // 1 ─ Groq 70b
   try {
     const res = await groq.chat.completions.create({
       model: PRIMARY_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -202,10 +235,10 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 70b quota hit — trying Groq 8b');
+    console.warn('[fallback] Groq 70b quota → trying Groq 8b');
   }
 
-  // ── Attempt 2: Groq FAST (8b) ────────────────────────────────────────────
+  // 2 ─ Groq 8b
   try {
     const res = await groq.chat.completions.create({
       model: FAST_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -213,10 +246,10 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 8b quota hit — trying Cerebras 70b');
+    console.warn('[fallback] Groq 8b quota → trying Cerebras 70b');
   }
 
-  // ── Attempt 3 & 4: Cerebras ──────────────────────────────────────────────
+  // 3 ─ Cerebras 70b
   const cerebras = makeCerebras();
   if (cerebras) {
     try {
@@ -224,22 +257,41 @@ export async function completeWithFallback(
       return { text, provider: 'cerebras', model: CEREBRAS_MODEL };
     } catch (err: any) {
       if (!isQuotaError(err)) throw err;
-      console.warn('[fallback] Cerebras 70b quota hit — trying Cerebras 8b');
+      console.warn('[fallback] Cerebras 70b quota → trying Cerebras 8b');
     }
+
+    // 4 ─ Cerebras 8b
     try {
       const text = await cerebras.complete(CEREBRAS_FAST, messages, maxTokens, temperature);
       return { text, provider: 'cerebras', model: CEREBRAS_FAST };
     } catch (err: any) {
-      console.error('[fallback] All providers exhausted:', err?.message);
-      throw new Error('All LLM providers are rate-limited. Try again later.');
+      if (!isQuotaError(err)) throw err;
+      console.warn('[fallback] Cerebras 8b quota → trying OpenRouter :free');
     }
   }
 
-  throw new Error('Groq quota exhausted and no Cerebras key configured.');
+  // 5 ─ OpenRouter (openrouter/auto — auto-selects best available free model)
+  const openrouter = makeOpenRouter();
+  if (openrouter) {
+    try {
+      const text = await openrouter.complete(
+        OPENROUTER_FREE,
+        messages,
+        maxTokens,
+        temperature,
+        OPENROUTER_HEADERS
+      );
+      return { text, provider: 'openrouter', model: OPENROUTER_FREE };
+    } catch (err: any) {
+      console.error('[fallback] OpenRouter also failed:', err?.message);
+      throw new Error('All LLM providers exhausted. Try again in a few hours.');
+    }
+  }
+
+  throw new Error('Groq quota exhausted — add CEREBRAS_API_KEY and OPENROUTER_API_KEY to env.');
 }
 
-// ── observeWithFallback — backwards-compat shim for /api/observe ─────────────
-// Existing callers pass (groq, messages, maxTokens). Internally uses the full chain.
+// ── observeWithFallback — backwards-compat shim ───────────────────────────────
 export async function observeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
@@ -247,7 +299,7 @@ export async function observeWithFallback(
 ): Promise<string> {
   const result = await completeWithFallback(groq, messages, maxTokens);
   if (result.provider !== 'groq') {
-    console.info(`[observeWithFallback] using ${result.provider}/${result.model}`);
+    console.info(`[fallback] active: ${result.provider}/${result.model}`);
   }
   return result.text;
 }
