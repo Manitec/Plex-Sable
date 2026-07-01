@@ -14,8 +14,8 @@ type SleepSource = 'cron' | 'manual';
 
 // ─── Dream probability config ────────────────────────────────────────────────
 const DREAM_PROB = {
-  dream:     { min: 0.52, range: 0.15 }, // 52–67%  (cron nights)
-  nightmare: { min: 0.21, range: 0.11 }, // 21–32%  (manual nightmare)
+  dream:     { min: 0.52, range: 0.15 },
+  nightmare: { min: 0.21, range: 0.11 },
 };
 
 function shouldDream(type: 'dream' | 'nightmare'): boolean {
@@ -25,9 +25,9 @@ function shouldDream(type: 'dream' | 'nightmare'): boolean {
 
 function willDream(mode: SleepMode, source: SleepSource): boolean {
   if (mode === 'dreamless') return false;
-  if (mode === 'nightmare') return shouldDream('nightmare'); // 21–32%
-  if (source === 'cron')    return shouldDream('dream');     // 52–67%
-  return true; // manual dream → always
+  if (mode === 'nightmare') return shouldDream('nightmare');
+  if (source === 'cron')    return shouldDream('dream');
+  return true;
 }
 
 // ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -135,13 +135,6 @@ async function listDir(path: string, token: string): Promise<string[]> {
 }
 
 // ─── Append helper ────────────────────────────────────────────────────────────
-// Appends a new block to a sediment file. Creates the file if it doesn't exist.
-// Block format mirrors the daily YYYY-MM-DD.md conversation sediment:
-//   ---
-//   {text}
-//   *[label — timestamp ET]*
-//   ---
-
 function etTimestamp(): string {
   return new Date().toLocaleTimeString('en-US', {
     timeZone: 'America/New_York',
@@ -339,7 +332,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
 
-  // Append to nyx-YYYY-MM-DD.md
   await appendSediment(
     `sediment/nyx-${today}.md`,
     nyxOutput,
@@ -353,7 +345,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const hexOutput = await callBanjoSynthesize(hexInput);
 
   if (hexOutput) {
-    // Append to hex-YYYY-MM-DD.md
     await appendSediment(
       `sediment/hex-${today}.md`,
       hexOutput,
@@ -371,7 +362,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
 
   const plexOutput = await groqComplete(PLEX_SYNTHESIS_PROMPT, plexInput);
 
-  // Append to plex-YYYY-MM-DD.md
   await appendSediment(
     `sediment/plex-${today}.md`,
     plexOutput,
@@ -380,25 +370,33 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     `plex ${mode} sediment ${today}`,
   );
 
-  // ── Append all three to daily log YYYY-MM-DD.md ───────────────────────────
-  // Each voice gets its own block in the shared daily sediment file,
-  // exactly like conversation sediment blocks.
-  const dailyPath = `sediment/${today}.md`;
-  const modeTag = mode === 'nightmare' ? ' nightmare' : mode === 'dreamless' ? ' dreamless' : '';
+  // ── Daily log: one summary block per sleep run ─────────────────────────────
+  // Full outputs live in nyx-/hex-/plex- files.
+  // The shared daily log gets a compact summary: mode + short excerpt per voice.
+  const excerpt = (s: string) => s.replace(/\n+/g, ' ').slice(0, 120).trimEnd() + '…';
+  const summaryLines = [
+    `**sleep pass** — ${mode}`,
+    ``,
+    `nyx: “${excerpt(nyxOutput)}”`,
+    hexOutput ? `hex: “${excerpt(hexOutput)}”` : null,
+    `plex: “${excerpt(plexOutput)}”`,
+  ].filter((l): l is string => l !== null).join('\n');
 
-  await appendSediment(dailyPath, nyxOutput, `nyx — sleep${modeTag}`, token, `sleep sediment (nyx) ${today}`);
-  if (hexOutput) {
-    await appendSediment(dailyPath, hexOutput, `hex — sleep${modeTag}`, token, `sleep sediment (hex) ${today}`);
-  }
-  await appendSediment(dailyPath, plexOutput, `plex — sleep${modeTag}`, token, `sleep sediment (plex) ${today}`);
+  await appendSediment(
+    `sediment/${today}.md`,
+    summaryLines,
+    `plex — sleep`,
+    token,
+    `sleep summary ${today}`,
+  );
 
-  // ── State + DreamNode (parallel, non-blocking) ────────────────────────────
+  // ── State + DreamNode ──────────────────────────────────────────────────────────
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
 
-  // ── Write latest to Firestore ─────────────────────────────────────────────
+  // ── Firestore ──────────────────────────────────────────────────────────────────
   await db.doc('plex_sleep/latest').set(
     {
       date: today,
@@ -412,7 +410,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     { merge: false }
   ).catch(() => {});
 
-  // ── Probabilistic dream trigger ───────────────────────────────────────────
+  // ── Dream trigger ────────────────────────────────────────────────────────────
   if (willDream(mode, source)) {
     const cronSecret = process.env.CRON_SECRET ?? '';
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
