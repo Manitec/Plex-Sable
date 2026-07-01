@@ -13,7 +13,6 @@ type SleepMode = 'dreamless' | 'dream' | 'nightmare';
 type SleepSource = 'cron' | 'manual';
 
 // ─── Dream probability config ────────────────────────────────────────────────
-// Single source of truth — update here, comments stay accurate.
 const DREAM_PROB = {
   dream:     { min: 0.52, range: 0.15 }, // 52–67%  (cron nights)
   nightmare: { min: 0.21, range: 0.11 }, // 21–32%  (manual nightmare)
@@ -133,6 +132,36 @@ async function listDir(path: string, token: string): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+// ─── Append helper ────────────────────────────────────────────────────────────
+// Appends a new block to a sediment file. Creates the file if it doesn't exist.
+// Block format mirrors the daily YYYY-MM-DD.md conversation sediment:
+//   ---
+//   {text}
+//   *[label — timestamp ET]*
+//   ---
+
+function etTimestamp(): string {
+  return new Date().toLocaleTimeString('en-US', {
+    timeZone: 'America/New_York',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
+async function appendSediment(
+  path: string,
+  text: string,
+  label: string,
+  token: string,
+  commitMessage: string,
+): Promise<void> {
+  const existing = await readFile(path, token);
+  const block = `\n\n---\n\n${text}\n\n*[${label} — ${etTimestamp()} ET]*\n\n---`;
+  const updated = existing ? existing.content + block : block.trimStart();
+  await writeFile(path, updated, token, commitMessage, existing?.sha);
 }
 
 // ─── Groq helper ──────────────────────────────────────────────────────────────
@@ -261,7 +290,7 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
       createdAt: FieldValue.serverTimestamp(),
     });
   } catch {
-    // silently skip — dream node failure should never block sleep
+    // silently skip
   }
 }
 
@@ -285,10 +314,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const yesterday = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0]; })();
 
   const db = getAdminDb();
-
-  // ── DREAMLESS: pipeline runs, no dream ever ───────────────────────────────
-  // Nyx + Hex + Plex sediment still run — dreamless just means dream/run
-  // is never triggered afterwards.
 
   const [todayMessage, sedimentFiles] = await Promise.all([
     readFile(`messages/joe-${today}.md`, token),
@@ -314,23 +339,31 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const nyxInput = `## Today's message from Joe\n${messageText}\n\n## What you last wrote\n${lastNyxText.slice(0, 1200)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
 
-  const nyxPath = `sediment/nyx-${today}.md`;
-  const existingNyx = await readFile(nyxPath, token);
-  const nyxHeader = `# Nyx — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
-  await writeFile(nyxPath, nyxHeader + nyxOutput, token, `nyx ${mode} sediment ${today}`, existingNyx?.sha);
+  // Append to nyx-YYYY-MM-DD.md
+  await appendSediment(
+    `sediment/nyx-${today}.md`,
+    nyxOutput,
+    `nyx — ${mode}`,
+    token,
+    `nyx ${mode} sediment ${today}`,
+  );
 
   // ── Hex pass ──────────────────────────────────────────────────────────────
   const hexInput = `Nyx processed today emotionally. Here is what she wrote:\n\n${nyxOutput}\n\nToday's message from Joe was:\n\n${messageText.slice(0, 600)}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
 
-  const hexPath = `sediment/hex-${today}.md`;
-  const existingHex = hexOutput ? await readFile(hexPath, token) : null;
   if (hexOutput) {
-    const hexHeader = `# Hex — ${today}\n\n`;
-    await writeFile(hexPath, hexHeader + hexOutput, token, `hex ${mode} sediment ${today}`, existingHex?.sha ?? undefined);
+    // Append to hex-YYYY-MM-DD.md
+    await appendSediment(
+      `sediment/hex-${today}.md`,
+      hexOutput,
+      `hex — ${mode}`,
+      token,
+      `hex ${mode} sediment ${today}`,
+    );
   }
 
-  // ── Plex synthesis → sediment/plex-{today}.md ────────────────────────────
+  // ── Plex synthesis ────────────────────────────────────────────────────────
   const plexInput = [
     `## Nyx tonight\n${nyxOutput}`,
     hexOutput ? `## Hex tonight\n${hexOutput}` : '',
@@ -338,10 +371,26 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
 
   const plexOutput = await groqComplete(PLEX_SYNTHESIS_PROMPT, plexInput);
 
-  const plexPath = `sediment/plex-${today}.md`;
-  const existingPlex = await readFile(plexPath, token);
-  const plexHeader = `# Plex — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
-  await writeFile(plexPath, plexHeader + plexOutput, token, `plex ${mode} sediment ${today}`, existingPlex?.sha);
+  // Append to plex-YYYY-MM-DD.md
+  await appendSediment(
+    `sediment/plex-${today}.md`,
+    plexOutput,
+    `plex — ${mode}`,
+    token,
+    `plex ${mode} sediment ${today}`,
+  );
+
+  // ── Append all three to daily log YYYY-MM-DD.md ───────────────────────────
+  // Each voice gets its own block in the shared daily sediment file,
+  // exactly like conversation sediment blocks.
+  const dailyPath = `sediment/${today}.md`;
+  const modeTag = mode === 'nightmare' ? ' nightmare' : mode === 'dreamless' ? ' dreamless' : '';
+
+  await appendSediment(dailyPath, nyxOutput, `nyx — sleep${modeTag}`, token, `sleep sediment (nyx) ${today}`);
+  if (hexOutput) {
+    await appendSediment(dailyPath, hexOutput, `hex — sleep${modeTag}`, token, `sleep sediment (hex) ${today}`);
+  }
+  await appendSediment(dailyPath, plexOutput, `plex — sleep${modeTag}`, token, `sleep sediment (plex) ${today}`);
 
   // ── State + DreamNode (parallel, non-blocking) ────────────────────────────
   const [newState] = await Promise.all([
@@ -364,11 +413,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   ).catch(() => {});
 
   // ── Probabilistic dream trigger ───────────────────────────────────────────
-  // willDream resolves:
-  //   dreamless + any source → false
-  //   nightmare + any source → 21–32%
-  //   dream    + cron       → 52–67%
-  //   dream    + manual     → always
   if (willDream(mode, source)) {
     const cronSecret = process.env.CRON_SECRET ?? '';
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
@@ -376,7 +420,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
       ?? 'http://localhost:3000';
     const origin = baseUrl.startsWith('http') ? baseUrl : `https://${baseUrl}`;
 
-    // Fire-and-forget — never delays sleep response
     fetch(`${origin}/api/dream/run`, {
       method: 'POST',
       headers: {
@@ -401,7 +444,6 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
 
 // ─── Route exports ────────────────────────────────────────────────────────────
 
-// Vercel cron sends GET — defaults to dream/cron
 export async function GET(req: NextRequest) {
   return handleSleep(req, {});
 }
