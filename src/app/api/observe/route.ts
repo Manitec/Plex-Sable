@@ -7,35 +7,25 @@ import {
   makeGroq, buildObservePrompt, isSelfReferential,
   isActionIntent, PLEX_ACTION_PROMPT, PLEX_VISION_TONE,
   fetchBaseIdentity, PLEX_BROWSER_CONTEXT,
-  observeWithFallback, PRIMARY_MODEL,
+  observeWithFallback, completeWithFallback,
 } from "@/lib/plex-identity";
 
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-// ── SYN-E: question detection ─────────────────────────────────────────────────
-// Returns true if the prompt looks like a genuine question Plex should search for.
-// Avoids triggering on action intents ("click", "fill", "scroll") or
-// page-read requests ("what's on this page", "summarise this").
+// ── SYN-E: question detection ─────────────────────────────────────────────
 function isQuestion(prompt: string | null): boolean {
   if (!prompt || prompt.trim().length < 8) return false;
   const p = prompt.trim().toLowerCase();
-  // Explicit question mark
   if (p.endsWith("?")) return true;
-  // Question word openers
   if (/^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/.test(p)) return true;
   return false;
 }
 
-// ── SYN-E: call /api/search (SRC) then /api/answer in electron mode ────────────
-async function runSynE(
-  question: string,
-  pageContext: string,
-  baseUrl: string
-): Promise<string> {
+// ── SYN-E: search + synthesize ──────────────────────────────────────────
+async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
   try {
-    // 1. SRC — web search
     const srcRes = await fetch(`${baseUrl}/api/search`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -49,16 +39,10 @@ async function runSynE(
           .join("\n\n")
       : "(no search results)";
 
-    // 2. SYN-E — answer synthesis with electron context
     const synRes = await fetch(`${baseUrl}/api/answer`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        question,
-        searchResults,
-        pageContext,
-        source: "electron",
-      }),
+      body: JSON.stringify({ question, searchResults, pageContext, source: "electron" }),
     });
     const synData = synRes.ok ? await synRes.json() : null;
     return synData?.answer ?? "(no answer)";
@@ -68,7 +52,6 @@ async function runSynE(
   }
 }
 
-// Derive the base URL for internal calls (works both locally and on Vercel)
 function getBaseUrl(req: NextRequest): string {
   const host = req.headers.get("host") ?? "localhost:3000";
   const proto = host.startsWith("localhost") ? "http" : "https";
@@ -121,27 +104,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
     }
 
-    // Fetch base identity from plex/prompts/base.md — never trimmed, always full
     const baseIdentity = await fetchBaseIdentity();
-
-    const groq    = makeGroq();
+    const groq = makeGroq();
     let response  = "";
     let actions: object[] = [];
     let synEAnswer: string | null = null;
 
-    // ── SYN-E PATH — PE question detected, run search synthesis in parallel ────
-    // Fires before the main observe path so both can run concurrently.
+    // ── SYN-E ──────────────────────────────────────────────────────────────────
     let synEPromise: Promise<string> | null = null;
     if (shouldSearch && prompt) {
       const pageContext = [
-        title   ? `Page: ${title}` : "",
-        url     ? `URL: ${url}` : "",
+        title    ? `Page: ${title}` : "",
+        url      ? `URL: ${url}` : "",
         pageText ? `Page excerpt:\n${pageText.slice(0, 800)}` : "",
       ].filter(Boolean).join("\n");
       synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
     }
 
-    // ── VISION PATH ───────────────────────────────────────────────────────────────────
+    // ── VISION PATH ─────────────────────────────────────────────────────────────
+    // Vision requires Groq (multimodal). Cerebras/OpenRouter free tier don't support it.
+    // On quota error: return a graceful message rather than a hard 500.
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -156,21 +138,33 @@ export async function POST(req: NextRequest) {
       const userText     = prompt?.trim() || selectedText?.trim() || "What do you see? Give me your open impression.";
       const visionPrompt = `${baseIdentity}${PLEX_BROWSER_CONTEXT}${PLEX_VISION_TONE}`;
 
-      const completion = await groq.chat.completions.create({
-        model: VISION_MODEL,
-        messages: [
-          { role: "user",      content: visionPrompt },
-          { role: "assistant", content: "Understood. I am seeing." },
-          { role: "user",      content: [imageContent, { type: "text", text: userText }] },
-        ],
-        max_tokens: 1024,
-      } as any);
-      response = completion.choices[0].message.content?.trim() ?? "";
+      try {
+        const completion = await groq.chat.completions.create({
+          model: VISION_MODEL,
+          messages: [
+            { role: "user",      content: visionPrompt },
+            { role: "assistant", content: "Understood. I am seeing." },
+            { role: "user",      content: [imageContent, { type: "text", text: userText }] },
+          ],
+          max_tokens: 1024,
+        } as any);
+        response = completion.choices[0].message.content?.trim() ?? "";
+      } catch (err: any) {
+        const msg = String(err?.message ?? "");
+        const isQuota = err?.status === 429 || msg.includes("rate_limit") || msg.includes("TPD") || msg.includes("quota");
+        if (isQuota) {
+          response = "I\'m at my vision limit right now — Groq\'s daily token cap. Try again in about an hour.";
+          console.warn('[vision] Groq quota hit — returning graceful message');
+        } else {
+          throw err;
+        }
+      }
 
-    // ── ACTION PATH ──────────────────────────────────────────────────────────────────
+    // ── ACTION PATH ─────────────────────────────────────────────────────────────
+    // Uses completeWithFallback — action planning works fine on Cerebras/OpenRouter.
     } else if (canAct && isActionIntent(prompt)) {
       const elementsBlock = interactiveElements.length
-        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — use these for selectors):\n${JSON.stringify(interactiveElements, null, 2)}`
+        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM):\n${JSON.stringify(interactiveElements, null, 2)}`
         : "\n\n(No interactive elements list provided — infer selectors from page text.)";
 
       const pageContext = [
@@ -181,18 +175,16 @@ export async function POST(req: NextRequest) {
 
       const userMessage = `Joe's instruction: ${prompt}${elementsBlock}\n\nPage context:\n${pageContext}`;
 
-      const completion = await groq.chat.completions.create({
-        model: PRIMARY_MODEL,
-        messages: [
+      const { text: raw } = await completeWithFallback(
+        groq,
+        [
           { role: "system", content: PLEX_ACTION_PROMPT },
           { role: "user",   content: userMessage },
         ],
-        temperature: 0.2,
-        max_tokens: 512,
-        response_format: { type: "json_object" },
-      } as any);
+        512,
+        0.2
+      );
 
-      const raw = completion.choices[0].message.content?.trim() ?? "{}";
       try {
         const parsed = JSON.parse(raw);
         response = parsed.response ?? "I'll take care of that.";
@@ -202,7 +194,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH — uses fallback (70b → 8b on token/rate errors) ───────────────────
+    // ── OBSERVE PATH ────────────────────────────────────────────────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
@@ -227,16 +219,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Resolve SYN-E if it was kicked off ────────────────────────────────────
+    // ── Resolve SYN-E ────────────────────────────────────────────────────────────
     if (synEPromise) {
       synEAnswer = await synEPromise;
-      // Prepend the search synthesis to the observe response so PE sees it cleanly
       if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
         response = synEAnswer + (response ? `\n\n---\n${response}` : "");
       }
     }
 
-    // ── LOG ────────────────────────────────────────────────────────────────────────
+    // ── LOG ────────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -253,7 +244,7 @@ export async function POST(req: NextRequest) {
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ───────────────────────────────────────────────────────────────────
+    // ── SEDIMENT ────────────────────────────────────────────────────────────────
     if (!silent) {
       const sedimentNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
