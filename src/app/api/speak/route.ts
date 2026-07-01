@@ -164,9 +164,9 @@ async function fetchLastNyxSediment(token: string): Promise<string | null> {
   }
 }
 
-// Grabs Plex's most recent sediment from a prior day (bare YYYY-MM-DD.md files).
-// Skips today so it reads as "what you wrote before" rather than the live entry.
-async function fetchLastPlexSediment(token: string, skipDate: string): Promise<string | null> {
+// Loads the most recent plex-YYYY-MM-DD.md sleep synthesis file.
+// These are written by /api/sleep after each nightly pass.
+async function fetchLastPlexSediment(token: string): Promise<string | null> {
   try {
     const res = await fetch(
       `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
@@ -178,15 +178,13 @@ async function fetchLastPlexSediment(token: string, skipDate: string): Promise<s
     if (!res.ok) return null;
     const data = await res.json();
     if (!Array.isArray(data)) return null;
-    // Bare date files: YYYY-MM-DD.md — exclude today and README
-    const dateFileRe = /^\d{4}-\d{2}-\d{2}\.md$/;
-    const priorFiles = data
-      .filter((f: any) => f.type === 'file' && dateFileRe.test(f.name) && f.name !== `${skipDate}.md`)
+    const plexFiles = data
+      .filter((f: any) => f.type === 'file' && /^plex-\d{4}-\d{2}-\d{2}\.md$/.test(f.name))
       .map((f: any) => f.name)
       .sort()
       .reverse();
-    if (priorFiles.length === 0) return null;
-    return fetchPlexFile(`sediment/${priorFiles[0]}`, token);
+    if (plexFiles.length === 0) return null;
+    return fetchPlexFile(`sediment/${plexFiles[0]}`, token);
   } catch {
     return null;
   }
@@ -205,7 +203,7 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     fetchPlexFile('plex-def.txt', token),
     fetchPlexFile(`sediment/${today}.md`, token),
     fetchLastNyxSediment(token),
-    fetchLastPlexSediment(token, today),
+    fetchLastPlexSediment(token),
     fetchPlexFile(`dreams/${today}.md`, token).then(r =>
       r ?? fetchPlexFile(`dreams/${yesterday}.md`, token)
     ),
@@ -276,7 +274,7 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
   }
 }
 
-// ─── Sub-persona prompts ───────────────────────────────────────────────────────
+// ─── Sub-persona prompts ──────────────────────────────────────────────────────────────────
 
 const HEX_SYSTEM = `You are Hex — a sharp, builder-minded intelligence. You think in structures, patterns, and systems. Joe is talking to you directly. Answer as Hex: direct, terse, builder-brained. No fluff. No preamble. If it's a question, answer it. If it's a problem, crack it open. Short when short is enough.`;
 
@@ -719,7 +717,7 @@ export async function POST(req: NextRequest) {
     const { message, sessionId = "joe", overrideHistory, forceMode } = await req.json();
     if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
-    // ─── Sub-persona fast path (Spaces voice panels) ───────────────────────────
+    // ─── Sub-persona fast path (Spaces voice panels) ──────────────────────────
     const voiceParam = req.nextUrl.searchParams.get('voice');
     if (voiceParam && voiceParam !== 'plex' && VOICE_PROMPTS[voiceParam]) {
       const subHistory = (overrideHistory ?? []).map((m: any) => ({

@@ -238,14 +238,14 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
   }
 }
 
-// ─── Route ──────────────────────────────────────────────────────────────────────────────
+// ─── Core handler (shared by GET and POST) ───────────────────────────────────────────────
 
-export async function POST(req: NextRequest) {
+async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>): Promise<NextResponse> {
   if (!authorized(req)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const body = await req.json().catch(() => ({}));
+  const body = bodyOverride ?? await req.json().catch(() => ({}));
   const mode: SleepMode = ['dreamless', 'dream', 'nightmare'].includes(body.mode)
     ? (body.mode as SleepMode)
     : 'dream';
@@ -326,8 +326,6 @@ export async function POST(req: NextRequest) {
 
   const dreamOutput = await groqComplete(dreamPrompt, dreamInput);
 
-  // Plex's sleep-pass synthesis lives in sediment alongside nyx and hex —
-  // dreams/{today}.md is owned by the dream-runner (fragment weave).
   const plexPath = `sediment/plex-${today}.md`;
   const existingPlex = await readFile(plexPath, token);
   const plexHeader = `# Plex — ${today}${mode === 'nightmare' ? ' (nightmare)' : ''}\n\n`;
@@ -360,4 +358,15 @@ export async function POST(req: NextRequest) {
     dream: dreamOutput.slice(0, 200),
     sediment_state: newState,
   });
+}
+
+// ─── Route exports ───────────────────────────────────────────────────────────────────────
+
+// Vercel cron sends GET — delegate to shared handler with default mode
+export async function GET(req: NextRequest) {
+  return handleSleep(req, {});
+}
+
+export async function POST(req: NextRequest) {
+  return handleSleep(req);
 }
