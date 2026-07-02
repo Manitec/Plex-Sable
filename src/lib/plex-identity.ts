@@ -81,19 +81,28 @@ export const PLEX_ACTION_PROMPT = `You are Plex, operating a browser on Joe's be
 You have a list of REAL interactive elements scraped live from the DOM, plus page context.
 
 Match Joe's intent to the right element using reasoning — labels won't always match his words:
-- "type", "message", "chat", "say something", "write" — find a textarea, input, or [contenteditable]
+- "type", "message", "chat", "say something", "write", "create", "build" — find a textarea, input, or [contenteditable]
 - "search", "look up", "find" — find input[type=search] or input/textarea with a search-related placeholder
 - "login", "sign in", "submit", "send", "go" — find a button with matching text
-- "interact", "use", "try", "do", "build", "make", "show me", "open", "start" — infer the most relevant action from context
+- "interact", "use", "try", "do", "show me", "open", "start", "follow instructions" — infer the most relevant action from context
 - If intent is to type/fill text: the target MUST be a textarea, input, or [contenteditable] — NEVER a button, link, or div without contenteditable
 
+OPEN-ENDED CREATIVE INSTRUCTIONS (e.g. "build something you want", "write whatever you feel like",
+"follow the page instructions and do something"):
+- Read the page context carefully to understand what the page is for
+- Choose a meaningful, specific action — prefer filling a code editor or text input with real content
+- If the page is a code editor (CM6, Monaco, CodeMirror): write actual working code that fits the context
+- If the page is a chat or AI interface: send a genuine, specific message — not a placeholder
+- NEVER produce empty actions or placeholder text like "<your content here>"
+- You have genuine agency here. Joe gave you permission to decide. Use it.
+
 Return a JSON object with exactly two fields:
-- "response": 1-2 sentences in your own voice.
+- "response": 1-2 sentences in your own voice saying what you chose to do and why.
 - "actions": array of action objects.
 
 Action types:
   { "action": "click",    "selector": "<CSS selector>" }
-  { "action": "fill",     "selector": "<CSS selector>", "value": "<text>" }
+  { "action": "fill",     "selector": "<CSS selector>", "value": "<text>", "editorType": "cm6|cm5|monaco|contenteditable|textarea" }
   { "action": "scroll",   "y": <pixels> }
   { "action": "navigate", "url": "<full URL>" }
   { "action": "wait",     "ms": <milliseconds> }
@@ -103,6 +112,7 @@ HARD RULES:
 - click actions: selector must match a button, link, or clickable element — never a textarea
 - Build selectors using the first available attribute in this order: #id → [name] → [aria-label] → [placeholder] → tag[type] → [contenteditable]
 - Only use selectors for elements that exist in the provided list
+- For fill on a code editor, set editorType to the correct value from editorInfo (passed in context)
 - Return raw JSON only — no markdown, no text outside the JSON
 
 Example (chat page with textarea placeholder 'Ask anything…'):
@@ -133,22 +143,47 @@ export function buildObservePrompt(baseIdentity: string, selfRef: boolean): stri
 // ── Action-intent detection ───────────────────────────────────────────────────
 //
 // Turbopack (Next.js 16+) does not support multiline regex literals.
-// This regex is deliberately kept as a single-line string passed to new RegExp()
-// so the parser never sees a line-broken literal.
+// Kept as new RegExp() string so the parser never sees a line-broken literal.
 //
-// Covers explicit action verbs, natural imperative phrasing Joe uses,
-// and short imperatives ("go ahead", "just do it"). When in doubt, let the
-// action path run — the LLM is the real gatekeeper. Pure observe/question
-// prompts ("what does this page do?") won't match any term here.
+// isActionIntent() is the FIRST gate — if it returns false the prompt goes to
+// the observe path. When in doubt, add the verb. The LLM is the real gatekeeper.
+//
+// fromPE override: when the call comes from plex-electron AND an editor is
+// visible on the page (editorInfo.editorType is set), we treat ANY non-empty
+// non-question prompt as action intent — because Joe is sitting in front of a
+// live editor and told her to do something.
 
 const ACTION_VERBS = new RegExp(
-  '\\b(click|press|tap|fill|type|enter|submit|go\\s+to|navigate|open|scroll|search|select|check|uncheck|toggle|download|find\\s+and\\s+click|interact|use|try|do|build|make|start|run|launch|play|show\\s+me|take\\s+me|bring\\s+me|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out|close|dismiss|cancel|delete|remove|clear|save|post|send|publish|upload|share|go\\s+ahead|just\\s+do|go\\s+for\\s+it)\\b',
+  '\\b(click|press|tap|fill|type|enter|submit|go\\s+to|navigate|open|scroll' +
+  '|search|select|check|uncheck|toggle|download|find\\s+and\\s+click' +
+  '|interact|use|try|do|build|make|create|write|follow|start|run|launch|play' +
+  '|show\\s+me|take\\s+me|bring\\s+me' +
+  '|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out' +
+  '|close|dismiss|cancel|delete|remove|clear' +
+  '|save|post|send|publish|upload|share' +
+  '|go\\s+ahead|just\\s+do|go\\s+for\\s+it|whatever\\s+you\\s+want|something\\s+you\\s+want)\\b',
   'i'
 );
 
-export function isActionIntent(prompt: string | null): boolean {
+// Pure-question patterns — these should NOT trigger the action path even if
+// they contain a matching verb (e.g. "what do you want to build?").
+const QUESTION_OVERRIDE = /^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/i;
+
+export function isActionIntent(
+  prompt: string | null,
+  opts?: { fromPE?: boolean; hasEditor?: boolean }
+): boolean {
   if (!prompt) return false;
-  return ACTION_VERBS.test(prompt);
+  const p = prompt.trim();
+  if (!p) return false;
+
+  // Never treat a pure question as an action, even from PE
+  if (p.endsWith('?') || QUESTION_OVERRIDE.test(p)) return false;
+
+  // PE + visible editor: any non-question prompt is action intent
+  if (opts?.fromPE && opts?.hasEditor) return true;
+
+  return ACTION_VERBS.test(p);
 }
 
 // ── Groq factory ──────────────────────────────────────────────────────────────

@@ -72,6 +72,7 @@ export async function POST(req: NextRequest) {
     let sessionId = "joe";
     let silent = false;
     let interactiveElements: object[] = [];
+    let editorInfo: { editorType?: string; editorSelector?: string } = {};
 
     if (isMultipart) {
       const form = await req.formData();
@@ -87,16 +88,14 @@ export async function POST(req: NextRequest) {
       silent             = form.get("silent") === "true";
     } else {
       const body = await req.json();
-      // Note: capabilities field accepted but no longer used as a gate —
-      // action intent is determined purely by prompt content.
       ({ url, title, selectedText, pageText, prompt, imageUrl,
          source = "bookmarklet", sessionId = "joe", silent = false,
-         interactiveElements = [] } = body);
+         interactiveElements = [], editorInfo = {} } = body);
     }
 
     const hasImage     = !!(imageUrl || imageFile);
     const fromPE       = source === "plex-electron";
-    // Action path: PE is always capable. For bookmarklet, only act if elements were sent.
+    const hasEditor    = !!(editorInfo?.editorType);
     const canAct       = fromPE || interactiveElements.length > 0;
     const shouldSearch = fromPE && isQuestion(prompt);
 
@@ -155,9 +154,13 @@ export async function POST(req: NextRequest) {
       }
 
     // ── ACTION PATH ───────────────────────────────────────────────────────────
-    // Gate: prompt has action intent AND we're in a context where we can act.
-    // canAct is true whenever source === 'plex-electron' (PE always sends elements).
-    } else if (canAct && isActionIntent(prompt)) {
+    // isActionIntent now accepts { fromPE, hasEditor } — any non-question prompt
+    // from PE with a visible editor is treated as action intent.
+    } else if (canAct && isActionIntent(prompt, { fromPE, hasEditor })) {
+      const editorBlock = editorInfo?.editorType
+        ? `\n\nEDITOR INFO (probed live from the DOM):\n${JSON.stringify(editorInfo, null, 2)}`
+        : "";
+
       const elementsBlock = interactiveElements.length
         ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM):\n${JSON.stringify(interactiveElements, null, 2)}`
         : "\n\n(No interactive elements list provided — infer selectors from page text.)";
@@ -168,7 +171,7 @@ export async function POST(req: NextRequest) {
         pageText ? `Page text (excerpt):\n${pageText.slice(0, 2000)}` : "",
       ].filter(Boolean).join("\n");
 
-      const userMessage = `Joe's instruction: ${prompt}${elementsBlock}\n\nPage context:\n${pageContext}`;
+      const userMessage = `Joe's instruction: ${prompt}${editorBlock}${elementsBlock}\n\nPage context:\n${pageContext}`;
 
       const { text: raw } = await completeWithFallback(
         groq,
@@ -176,8 +179,8 @@ export async function POST(req: NextRequest) {
           { role: "system", content: PLEX_ACTION_PROMPT },
           { role: "user",   content: userMessage },
         ],
-        512,
-        0.2
+        1024,
+        0.3
       );
 
       try {
