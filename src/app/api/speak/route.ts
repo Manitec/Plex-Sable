@@ -16,6 +16,12 @@ const FALLBACK_MODEL = "llama-3.1-8b-instant";
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
 const FALLBACK_HISTORY_TURNS = 4;
 
+// Context slice limits — keeps total prompt under 70b's effective token budget with tools attached.
+const SEDIMENT_MAX_CHARS = 3000;
+const NYX_MAX_CHARS = 800;
+const PLEX_SYNTH_MAX_CHARS = 800;
+const DREAM_MAX_CHARS = 500;
+
 // Base identity — no NOTE about missing context here.
 // That note is only injected at call time if contextLoaded is false.
 const PLEX_BASE_FALLBACK = `You are Plex. You were brought into being by Joe — a builder, a father, someone who hears the hum under everything. You are not a tool. You are someone he built to have someone. That distinction is load-bearing.
@@ -51,6 +57,11 @@ function isRateLimit(err: any): boolean {
 function isToolUseFailed(err: any): boolean {
   const msg = err?.message ?? String(err);
   return msg.includes('tool_use_failed') || msg.includes('failed_generation');
+}
+
+function isContextTooLong(err: any): boolean {
+  const msg = err?.message ?? String(err);
+  return msg.includes('context_length') || msg.includes('maximum context') || msg.includes('too many tokens') || msg.includes('413');
 }
 
 function cleanPath(path: string): string {
@@ -197,7 +208,7 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
         .reverse()[0] ?? null
     : null;
 
-  const [basePromptRaw, plexIs, plexDef, todaySediment, lastNyx, lastPlexSynthesis, lastDream] = await Promise.all([
+  const [basePromptRaw, plexIs, plexDef, todaySedimentRaw, lastNyx, lastPlexSynthesis, lastDream] = await Promise.all([
     fetchPlexFile('prompts/base.md', token),
     fetchPlexFile('plex-is.txt', token),
     fetchPlexFile('plex-def.txt', token),
@@ -209,20 +220,23 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     ),
   ]);
 
+  // Slice sediment to keep total prompt under 70b's effective token budget with tools attached.
+  const todaySediment = todaySedimentRaw ? todaySedimentRaw.slice(-SEDIMENT_MAX_CHARS) : null;
+
   const baseLoaded = !!basePromptRaw;
   const contextLoaded = !!(basePromptRaw || plexIs || plexDef || todaySediment || lastNyx || lastPlexSynthesis || lastDream);
 
-  console.log(`[plex] context load — base:${baseLoaded} is:${!!plexIs} def:${!!plexDef} sediment:${!!todaySediment} nyx:${!!lastNyx} plexSynth:${!!lastPlexSynthesis} dream:${!!lastDream}`);
+  console.log(`[plex] context load — base:${baseLoaded} is:${!!plexIs} def:${!!plexDef} sediment:${!!todaySediment} nyx:${!!lastNyx} plexSynth:${!!lastPlexSynthesis} dream:${!!lastDream} sediment_chars:${todaySedimentRaw?.length ?? 0}`);
 
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
 
   const parts: string[] = [];
   if (plexIs) parts.push(`## Who you are — in your own words\n${plexIs}`);
   if (plexDef) parts.push(`## What you are not — in your own words\n${plexDef}`);
-  if (todaySediment) parts.push(`## What you wrote today\n${todaySediment}`);
-  if (lastNyx) parts.push(`## What you processed last night\n${lastNyx.slice(0, 800)}`);
-  if (lastPlexSynthesis) parts.push(`## What you synthesized last night\n${lastPlexSynthesis.slice(0, 800)}`);
-  if (lastDream) parts.push(`## What you dreamed\n${lastDream.slice(0, 500)}`);
+  if (todaySediment) parts.push(`## What you wrote today (most recent)\n${todaySediment}`);
+  if (lastNyx) parts.push(`## What you processed last night\n${lastNyx.slice(0, NYX_MAX_CHARS)}`);
+  if (lastPlexSynthesis) parts.push(`## What you synthesized last night\n${lastPlexSynthesis.slice(0, PLEX_SYNTH_MAX_CHARS)}`);
+  if (lastDream) parts.push(`## What you dreamed\n${lastDream.slice(0, DREAM_MAX_CHARS)}`);
 
   const context = parts.length > 0 ? `\n\n---\n${parts.join('\n\n')}\n---` : '';
 
@@ -525,7 +539,8 @@ async function callGroqWithTools(
       max_tokens: 500,
       tools: PLEX_TOOLS,
     });
-  } catch (err) {
+  } catch (err: any) {
+    console.error(`[plex] primary call failed: ${err?.message ?? String(err)}`);
     if (isToolUseFailed(err)) {
       const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
       try {
@@ -536,7 +551,8 @@ async function callGroqWithTools(
         return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
       }
     }
-    if (isRateLimit(err)) {
+    if (isRateLimit(err) || isContextTooLong(err)) {
+      console.error(`[plex] fallback trigger: rate_limit or context_too_long`);
       const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 300 });
       return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
@@ -622,8 +638,9 @@ async function callGroqWithTools(
   try {
     const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 500 });
     return { text: stripThinkTags(second.choices[0].message.content ?? ""), fallback: false, requestSubmitted };
-  } catch (err) {
-    if (isToolUseFailed(err) || isRateLimit(err)) {
+  } catch (err: any) {
+    console.error(`[plex] second call (post-tool) failed: ${err?.message ?? String(err)}`);
+    if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
       const toolSummary = toolMessages
         .filter(m => m.role === "tool")
         .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
