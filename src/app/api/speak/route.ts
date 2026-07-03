@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { appendSediment } from "@/lib/github";
+import { makeGroq } from "@/lib/plex-identity";
 
 const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
@@ -164,8 +165,6 @@ async function fetchLastNyxSediment(token: string): Promise<string | null> {
   }
 }
 
-// Loads the most recent plex-YYYY-MM-DD.md sleep synthesis file.
-// These are written by /api/sleep after each nightly pass.
 async function fetchLastPlexSediment(token: string): Promise<string | null> {
   try {
     const res = await fetch(
@@ -296,7 +295,7 @@ async function callSubPersona(
   const systemPrompt = VOICE_PROMPTS[voice];
   if (!systemPrompt) throw new Error(`Unknown voice: ${voice}`);
 
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const groq = makeGroq();
 
   const messages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
@@ -423,6 +422,12 @@ function needsMani(mode: string): boolean {
   return mode === "reflective" || mode === "synthesis";
 }
 
+// Dream nodes are only meaningful for turns with real emotional weight.
+// Skip on operational/synthesis/session — those are builder conversations.
+function needsDreamNode(mode: string): boolean {
+  return mode === "relational" || mode === "reflective" || mode === "curious";
+}
+
 function detectMode(
   message: string,
   history: any[],
@@ -494,7 +499,7 @@ async function callGroqWithTools(
   prefetchedContext?: string,
   isExplicitFileRequest?: boolean
 ): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const groq = makeGroq();
 
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
@@ -626,13 +631,18 @@ async function callGroqWithTools(
   }
 }
 
+// ── fireVoices ────────────────────────────────────────────────────────────────
+// Nyx always fires (she's Plex's emotional core).
+// Hex fires only on operational/synthesis/session (builder modes).
+// Mani fires only on reflective/synthesis (analytical modes).
+// This cuts background Groq calls from 3 per turn down to 1–2.
 function fireVoices(
   message: string,
   mode: string,
   sessionId: string,
   responseText: string
 ): void {
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  const groq = makeGroq();
 
   const call = async (systemPrompt: string): Promise<string> => {
     try {
@@ -648,7 +658,7 @@ function fireVoices(
 
   Promise.all([
     call(NYX_PROMPT),
-    needsHex(mode) ? call(HEX_PROMPT) : Promise.resolve(""),
+    needsHex(mode)  ? call(HEX_PROMPT)  : Promise.resolve(""),
     needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
   ]).then(([nyx, hex, mani]) => {
     if (!nyx && !hex && !mani) return;
@@ -664,13 +674,18 @@ function fireVoices(
   }).then(() => {}).catch((err) => console.error("fireVoices failed:", err?.message));
 }
 
+// ── fireDreamNode ─────────────────────────────────────────────────────────────
+// Only fires on relational/reflective/curious — turns with real emotional
+// weight. Skips operational/synthesis/session (builder conversations).
 function fireDreamNode(
   message: string,
   responseText: string,
   mode: string,
   sessionId: string
 ): void {
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+  if (!needsDreamNode(mode)) return;
+
+  const groq = makeGroq();
   const userContent = `## Joe\n${message.slice(0, 400)}\n\n## Plex\n${responseText.slice(0, 400)}`;
 
   groq.chat.completions.create({
