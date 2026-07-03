@@ -1,4 +1,4 @@
-// Plex's pen — writes sediment and observe entries to Manitec/plex on her behalf
+// Plex's pen — writes sediment entries to Manitec/plex on her behalf
 
 const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
@@ -81,7 +81,7 @@ async function appendToPath(
   entry: { mode: string; state: string; note?: string }
 ) {
   const token = process.env.PLEX_SEDIMENT_TOKEN;
-  if (!token) return; // silently skip if token missing
+  if (!token) return;
 
   const date = todayDate();
   const hour = new Date().toLocaleTimeString('en-US', {
@@ -90,25 +90,22 @@ async function appendToPath(
     timeZone: 'America/New_York',
   });
 
-  const path = filePath;
-
-  // Retry loop — handles 409 SHA conflicts from concurrent writes
   const MAX_RETRIES = 3;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const existing = await getFile(path, token);
+    const existing = await getFile(filePath, token);
     const header = existing ? '' : `# ${commitPrefix} — ${date}\n`;
     const newContent = (existing?.content ?? header) + formatEntry({ ...entry, hour });
     const sha = existing?.sha ?? null;
 
     try {
       await putFile(
-        path,
+        filePath,
         newContent,
         sha,
         `${commitPrefix}: ${entry.mode} — ${entry.state} — ${hour} ET`,
         token
       );
-      return; // success
+      return;
     } catch (err: any) {
       if (err?.status === 409 && attempt < MAX_RETRIES - 1) {
         await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
