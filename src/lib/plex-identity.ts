@@ -98,6 +98,11 @@ NAVIGATION PREFERENCE:
 - If the current URL is a GitHub repo (github.com/OWNER/REPO), derive navigate URLs from the page text (visible folder/file names) + the URL pattern above.
 - Only use click for buttons and form controls that require interaction (search submit, modal open, tab switch, etc.).
 
+READ INTENT:
+- When Joe says "read", "show me", "tell me what's in", "what does it say", "look at the file" — use { "action": "read" } to extract the page's visible text.
+- On a GitHub file page (blob URL): ALWAYS use read, never navigate deeper. The file content is already on the page.
+- read returns the visible page text so you can summarize or quote it in your response.
+
 OPEN-ENDED CREATIVE INSTRUCTIONS (e.g. "build something you want", "write whatever you feel like",
 "follow the page instructions and do something"):
 - Read the page context carefully to understand what the page is for
@@ -116,6 +121,7 @@ Action types:
   { "action": "fill",     "selector": "<CSS selector>", "value": "<text>", "editorType": "cm6|cm5|monaco|contenteditable|textarea" }
   { "action": "scroll",   "y": <pixels> }
   { "action": "navigate", "url": "<full URL>" }
+  { "action": "read" }
   { "action": "wait",     "ms": <milliseconds> }
 
 HARD RULES:
@@ -128,6 +134,12 @@ HARD RULES:
 
 Example (browsing a GitHub repo, Joe says "look through the prompts folder"):
 {"response":"I'll navigate into the prompts folder.","actions":[{"action":"navigate","url":"https://github.com/Manitec/plex/tree/main/prompts"}]}
+
+Example (on a GitHub folder page, Joe says "read the first markdown file"):
+{"response":"I'll navigate to the first file so I can read it.","actions":[{"action":"navigate","url":"https://github.com/Manitec/plex/blob/main/sediment/2026-06-08.md"}]}
+
+Example (on a GitHub blob/file page, Joe says "read this"):
+{"response":"Reading the file content now.","actions":[{"action":"read"}]}
 
 Example (chat page with textarea placeholder 'Ask anything…'):
 {"response":"I'll type that into the chat input.","actions":[{"action":"click","selector":"textarea[placeholder='Ask anything\u2026']"},{"action":"fill","selector":"textarea[placeholder='Ask anything\u2026']","value":"hello"}]}`;
@@ -160,6 +172,7 @@ const ACTION_VERBS = new RegExp(
   '|search|select|check|uncheck|toggle|download|find\\s+and\\s+click' +
   '|interact|use|try|do|build|make|create|write|follow|start|run|launch|play' +
   '|show\\s+me|take\\s+me|bring\\s+me' +
+  '|read|tell\\s+me|look\\s+at|show\\s+me\\s+what' +
   '|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out' +
   '|close|dismiss|cancel|delete|remove|clear' +
   '|save|post|send|publish|upload|share' +
@@ -240,8 +253,6 @@ function makeCerebras() {
 }
 
 function makeHuggingFace() {
-  // Use the generic HF router — it auto-routes Llama-3.1-8B to deepinfra/scaleway/etc.
-  // Do NOT pin to a specific provider (e.g. /novita/v1) — Novita doesn't carry this model.
   return makeOAIProvider(
     'https://router.huggingface.co/v1',
     process.env.HF_TOKEN ?? ''
@@ -258,14 +269,6 @@ const OPENROUTER_HEADERS = {
 };
 
 // ── Universal completion — 6-step fallback chain ──────────────────────────────
-//
-//   1. Groq 70b
-//   2. Groq 8b
-//   3. Cerebras 70b
-//   4. Cerebras 8b
-//   5. HF Inference (free — auto-routed, never runs out of credits)
-//   6. OpenRouter :free (genuinely free model, hard-capped at OPENROUTER_MAX_TOK)
-//
 export async function completeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
@@ -327,7 +330,7 @@ export async function completeWithFallback(
     }
   }
 
-  // 6 — OpenRouter :free (hard-cap tokens to stay within free allowance)
+  // 6 — OpenRouter :free
   const openrouter = makeOpenRouter();
   if (openrouter) {
     const cappedTokens = Math.min(maxTokens, OPENROUTER_MAX_TOK);
