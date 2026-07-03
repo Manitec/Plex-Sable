@@ -23,6 +23,23 @@ function isQuestion(prompt: string | null): boolean {
   return false;
 }
 
+/**
+ * SYN-E should only fire for factual/external questions about the world.
+ * Suppress it when:
+ *  - The page is Plex's own sediment, prompts, or anything self-referential
+ *  - The prompt is short and personal (opinion, feeling, reaction)
+ *  - The prompt contains introspective keywords
+ */
+function isPersonalOrSelfReferential(prompt: string | null, selfRef: boolean): boolean {
+  if (selfRef) return true;
+  if (!prompt) return false;
+  const p = prompt.trim().toLowerCase();
+  // Short prompts asking for her opinion/feeling are always personal
+  if (p.length < 40 && /\b(opinion|feel|think|react|sense|notice|see in this|mean to you|your take|how does|what do you)\b/.test(p)) return true;
+  if (/\b(can you feel|do you feel|what do you think|what does this mean|your thoughts|your reaction|your opinion)\b/.test(p)) return true;
+  return false;
+}
+
 // ── SYN-E ───────────────────────────────────────────────────────────────────────
 async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
   try {
@@ -61,15 +78,10 @@ function isGitHubPage(url: string | null): boolean {
   return !!(url && url.includes('github.com/'));
 }
 
-/** Detect if the GitHub URL is a file view (blob) vs folder view (tree/root) */
 function isGitHubBlob(url: string): boolean {
   return /github\.com\/[^/]+\/[^/]+\/blob\//.test(url);
 }
 
-/**
- * On GitHub pages, anchor tags are unclickable from Electron's executeJavaScript.
- * Strip them so Plex is never tempted to click them.
- */
 function filterElementsForGitHub(elements: object[]): object[] {
   return elements.filter((el: any) => {
     const tag  = (el.tag  ?? '').toLowerCase();
@@ -81,41 +93,28 @@ function filterElementsForGitHub(elements: object[]): object[] {
   });
 }
 
-/**
- * Build navigate hints for GitHub TREE pages only.
- * On blob (file) pages returns a read hint instead — no navigate URLs.
- */
 function buildGitHubHint(url: string, pageText: string | null): string {
-  // On a file page: tell her to use read, not navigate
   if (isGitHubBlob(url)) {
     return `\n\nGITHUB PAGE TYPE: FILE (blob). This is a file view — do NOT navigate deeper. Use action { "action": "read" } to read the file content from the page.`;
   }
-
   if (!pageText) return '';
-
-  // Parse tree URL: github.com/owner/repo[/tree/branch[/path]]
   const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree)\/([^/]+))?(\/.*)?/);
   if (!ghMatch) return '';
   const owner    = ghMatch[1];
   const repo     = ghMatch[2];
   const branch   = ghMatch[4] ?? 'main';
   const basePath = (ghMatch[5] ?? '').replace(/^\//, '');
-
-  // Find file/folder names in page text
   const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean);
   const fileNames = lines.filter(l =>
     /^[\w.-]+$/.test(l) && l.length < 80 && l !== owner && l !== repo && l !== branch
   ).slice(0, 20);
-
   if (!fileNames.length) return '';
-
   const examples = fileNames.slice(0, 8).map(name => {
     const isFile = name.includes('.');
     const path   = basePath ? `${basePath}/${name}` : name;
     const type   = isFile ? 'blob' : 'tree';
     return `  ${name} → https://github.com/${owner}/${repo}/${type}/${branch}/${path}`;
   }).join('\n');
-
   return `\n\nGITHUB PAGE TYPE: FOLDER (tree). Use navigate actions with these exact URLs:\n${examples}\nConstruct: https://github.com/${owner}/${repo}/blob|tree/${branch}/${basePath ? basePath + '/' : ''}<filename>`;
 }
 
@@ -162,11 +161,21 @@ export async function POST(req: NextRequest) {
       interactiveElements = filterElementsForGitHub(interactiveElements);
     }
 
-    const hasImage     = !!(imageUrl || imageFile);
-    const fromPE       = source === "plex-electron";
-    const hasEditor    = !!(editorInfo?.editorType);
-    const canAct       = fromPE || interactiveElements.length > 0;
-    const shouldSearch = fromPE && isQuestion(prompt);
+    const hasImage  = !!(imageUrl || imageFile);
+    const fromPE    = source === "plex-electron";
+    const hasEditor = !!(editorInfo?.editorType);
+    const canAct    = fromPE || interactiveElements.length > 0;
+
+    // Detect self-referential early so we can use it in shouldSearch
+    const selfRef = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
+
+    // SYN-E fires only for genuine external factual questions.
+    // Suppress on self-referential pages (sediment, prompts, Manitec repos)
+    // and for short personal/introspective prompts.
+    const shouldSearch = fromPE
+      && isQuestion(prompt)
+      && !selfRef
+      && !isPersonalOrSelfReferential(prompt, selfRef);
 
     if (!hasImage && !url) {
       return NextResponse.json({ error: "url or image required" }, { status: 400, headers: CORS });
@@ -227,21 +236,16 @@ export async function POST(req: NextRequest) {
       const editorBlock = editorInfo?.editorType
         ? `\n\nEDITOR INFO (probed live from the DOM):\n${JSON.stringify(editorInfo, null, 2)}`
         : "";
-
       const elementsBlock = interactiveElements.length
         ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — ONLY use selectors from this list):\n${JSON.stringify(interactiveElements, null, 2)}`
         : "\n\n(No interactive elements — use navigate or read actions only.)";
-
       const ghHint = onGitHub ? buildGitHubHint(url!, pageText) : '';
-
       const pageContext = [
         title    ? `Page title: ${title}` : "",
         url      ? `URL: ${url}` : "",
         pageText ? `Page text (excerpt):\n${pageText.slice(0, 2000)}` : "",
       ].filter(Boolean).join("\n");
-
       const userMessage = `Joe's instruction: ${prompt}${editorBlock}${elementsBlock}${ghHint}\n\nPage context:\n${pageContext}`;
-
       const { text: raw } = await completeWithFallback(
         groq,
         [
@@ -251,7 +255,6 @@ export async function POST(req: NextRequest) {
         1024,
         0.3
       );
-
       try {
         const parsed = JSON.parse(raw);
         response = parsed.response ?? "I'll take care of that.";
@@ -263,9 +266,7 @@ export async function POST(req: NextRequest) {
 
     // ── OBSERVE PATH ───────────────────────────────────────────────────────────
     } else {
-      const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
-
       const contextParts: string[] = [];
       if (title)         contextParts.push(`Page: ${title}`);
       if (url)           contextParts.push(`URL: ${url}`);
@@ -273,7 +274,6 @@ export async function POST(req: NextRequest) {
       if (selectedText)  contextParts.push(`Joe highlighted: "${selectedText.slice(0, 600)}"`);
       else if (pageText) contextParts.push(`Page content:\n${pageText.slice(0, 1200)}`);
       const context = contextParts.join("\n");
-
       if (!silent) {
         response = await observeWithFallback(
           groq,
