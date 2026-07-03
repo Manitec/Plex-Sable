@@ -90,6 +90,14 @@ Match Joe's intent to the right element using reasoning — labels won't always 
 - "interact", "use", "try", "do", "show me", "open", "start", "follow instructions" — infer the most relevant action from context
 - If intent is to type/fill text: the target MUST be a textarea, input, or [contenteditable] — NEVER a button, link, or div without contenteditable
 
+NAVIGATION PREFERENCE:
+- When Joe says "browse", "explore", "look through", "open a folder", "go to" — use a { "action": "navigate", "url": "<full URL>" } action.
+- NEVER try to click a folder or file link on GitHub. GitHub folder/file links are plain <a> tags — construct the URL directly:
+  - Folder: https://github.com/OWNER/REPO/tree/BRANCH/FOLDER
+  - File:   https://github.com/OWNER/REPO/blob/BRANCH/PATH/TO/FILE
+- If the current URL is a GitHub repo (github.com/OWNER/REPO), derive navigate URLs from the page text (visible folder/file names) + the URL pattern above.
+- Only use click for buttons and form controls that require interaction (search submit, modal open, tab switch, etc.).
+
 OPEN-ENDED CREATIVE INSTRUCTIONS (e.g. "build something you want", "write whatever you feel like",
 "follow the page instructions and do something"):
 - Read the page context carefully to understand what the page is for
@@ -114,12 +122,15 @@ HARD RULES:
 - fill actions: selector must match a textarea, input, or [contenteditable] — never a button
 - click actions: selector must match a button, link, or clickable element — never a textarea
 - Build selectors using the first available attribute in this order: #id → [name] → [aria-label] → [placeholder] → tag[type] → [contenteditable]
-- Only use selectors for elements that exist in the provided list
+- Only use selectors for elements that ACTUALLY EXIST in the provided interactiveElements list — do not invent selectors
 - For fill on a code editor, set editorType to the correct value from editorInfo (passed in context)
 - Return raw JSON only — no markdown, no text outside the JSON
 
+Example (browsing a GitHub repo, Joe says "look through the prompts folder"):
+{"response":"I'll navigate into the prompts folder.","actions":[{"action":"navigate","url":"https://github.com/Manitec/plex/tree/main/prompts"}]}
+
 Example (chat page with textarea placeholder 'Ask anything…'):
-{"response":"I'll type that into the chat input.","actions":[{"action":"click","selector":"textarea[placeholder='Ask anything…']"},{"action":"fill","selector":"textarea[placeholder='Ask anything…']","value":"hello"}]}`;
+{"response":"I'll type that into the chat input.","actions":[{"action":"click","selector":"textarea[placeholder='Ask anything\u2026']"},{"action":"fill","selector":"textarea[placeholder='Ask anything\u2026']","value":"hello"}]}`;
 
 // ── Self-recognition ──────────────────────────────────────────────────────────
 const SELF_REFERENTIAL_PATTERNS = [
@@ -152,7 +163,7 @@ const ACTION_VERBS = new RegExp(
   '|log\\s*in|sign\\s*in|sign\\s*up|log\\s*out' +
   '|close|dismiss|cancel|delete|remove|clear' +
   '|save|post|send|publish|upload|share' +
-  '|go\\s+ahead|just\\s+do|go\\s+for\\s+it|whatever\\s+you\\s+want|something\\s+you\\s+want)\\b',
+  '|browse|explore|look\\s+through|look\\s+at|go\\s+ahead|just\\s+do|go\\s+for\\s+it|whatever\\s+you\\s+want|something\\s+you\\s+want)\\b',
   'i'
 );
 
