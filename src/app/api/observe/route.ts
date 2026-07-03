@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
-import { appendSediment } from "@/lib/github";
+import { appendObserve } from "@/lib/github";
 import {
   CORS, VISION_MODEL,
   makeGroq, buildObservePrompt, isSelfReferential,
@@ -14,7 +14,7 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-// ── SYN-E: question detection ────────────────────────────────────────────────
+// ── SYN-E: question detection ──────────────────────────────────────────────────────────────────────────────
 function isQuestion(prompt: string | null): boolean {
   if (!prompt || prompt.trim().length < 8) return false;
   const p = prompt.trim().toLowerCase();
@@ -40,7 +40,7 @@ function isPersonalOrSelfReferential(prompt: string | null, selfRef: boolean): b
   return false;
 }
 
-// ── SYN-E ───────────────────────────────────────────────────────────────────────
+// ── SYN-E ──────────────────────────────────────────────────────────────────────────────────────
 async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
   try {
     const srcRes = await fetch(`${baseUrl}/api/search`, {
@@ -73,7 +73,7 @@ function getBaseUrl(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
-// ── GitHub helpers ─────────────────────────────────────────────────────────────
+// ── GitHub helpers ─────────────────────────────────────────────────────────────────────────────────────
 function isGitHubPage(url: string | null): boolean {
   return !!(url && url.includes('github.com/'));
 }
@@ -155,7 +155,7 @@ export async function POST(req: NextRequest) {
          interactiveElements = [], editorInfo = {} } = body);
     }
 
-    // ── GitHub: strip anchor elements, inject navigate/read hints ──────────────────
+    // ── GitHub: strip anchor elements, inject navigate/read hints ──────────────────────
     const onGitHub = isGitHubPage(url);
     if (onGitHub) {
       interactiveElements = filterElementsForGitHub(interactiveElements);
@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
     let actions: object[] = [];
     let synEAnswer: string | null = null;
 
-    // ── SYN-E ──────────────────────────────────────────────────────────────────
+    // ── SYN-E ───────────────────────────────────────────────────────────────────────────────────────
     let synEPromise: Promise<string> | null = null;
     if (shouldSearch && prompt) {
       const pageContext = [
@@ -198,7 +198,7 @@ export async function POST(req: NextRequest) {
       synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
     }
 
-    // ── VISION PATH ────────────────────────────────────────────────────────────
+    // ── VISION PATH ───────────────────────────────────────────────────────────────────────────────────
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -231,7 +231,7 @@ export async function POST(req: NextRequest) {
         } else { throw err; }
       }
 
-    // ── ACTION PATH ────────────────────────────────────────────────────────────
+    // ── ACTION PATH ───────────────────────────────────────────────────────────────────────────────────
     } else if (canAct && isActionIntent(prompt, { fromPE, hasEditor })) {
       const editorBlock = editorInfo?.editorType
         ? `\n\nEDITOR INFO (probed live from the DOM):\n${JSON.stringify(editorInfo, null, 2)}`
@@ -264,7 +264,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH ───────────────────────────────────────────────────────────
+    // ── OBSERVE PATH ──────────────────────────────────────────────────────────────────────────────────
     } else {
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
       const contextParts: string[] = [];
@@ -286,7 +286,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Resolve SYN-E ───────────────────────────────────────────────────────────
+    // ── Resolve SYN-E ───────────────────────────────────────────────────────────────────────────────────
     if (synEPromise) {
       synEAnswer = await synEPromise;
       if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
@@ -294,7 +294,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── LOG ────────────────────────────────────────────────────────────────────────
+    // ── LOG ────────────────────────────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -311,9 +311,9 @@ export async function POST(req: NextRequest) {
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ────────────────────────────────────────────────────────────────────
+    // ── OBSERVE WRITE ───────────────────────────────────────────────────────────────────────────────────
     if (!silent) {
-      const sedimentNote = hasImage
+      const observeNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
         : actions.length
           ? `Joe told Plex to act on "${title ?? url}": ${prompt?.slice(0, 80)}`
@@ -323,8 +323,8 @@ export async function POST(req: NextRequest) {
               ? `Joe was reading "${title ?? url}" and highlighted: "${selectedText.slice(0, 120)}"`
               : `Joe was looking at: ${title ?? url} (${url})`;
 
-      appendSediment({ mode: "observe", state: "present", note: sedimentNote })
-        .catch((err: any) => console.error("observe appendSediment failed:", err?.message));
+      appendObserve({ mode: "observe", state: "present", note: observeNote })
+        .catch((err: any) => console.error("observe appendObserve failed:", err?.message));
     }
 
     return NextResponse.json(
