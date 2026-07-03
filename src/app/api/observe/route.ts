@@ -98,7 +98,7 @@ function buildGitHubHint(url: string, pageText: string | null): string {
     return `\n\nGITHUB PAGE TYPE: FILE (blob). This is a file view — do NOT navigate deeper. Use action { "action": "read" } to read the file content from the page.`;
   }
   if (!pageText) return '';
-  const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree)\/([^/]+))?(\/.*)?/);
+  const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree)\/([^/]+))?(\/.*)?\//);
   if (!ghMatch) return '';
   const owner    = ghMatch[1];
   const repo     = ghMatch[2];
@@ -281,7 +281,7 @@ export async function POST(req: NextRequest) {
             { role: "system", content: systemPrompt },
             { role: "user",   content: context },
           ],
-          220
+          400
         );
       }
     }

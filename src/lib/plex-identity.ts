@@ -188,9 +188,17 @@ const QUESTION_OVERRIDE = /^(what|who|when|where|why|how|which|is|are|was|were|d
  * they need her full presence, not JSON.
  *
  * Checked BEFORE ACTION_VERBS so patterns like "we will work through it"
- * don’t accidentally match \bdo\b or \bwork\b inside the verb list.
+ * don't accidentally match \bdo\b or \bwork\b inside the verb list.
  */
 const REASSURANCE_OVERRIDE = /^(it'?s?\s+ok|that'?s?\s+ok|its\s+ok|we\s+will|we'll|we\s+can|i\s+know|i\s+hear\s+you|i\s+see\s+you|i\s+got\s+you|i'?m\s+here|thank\s+you|thanks|you'?re\s+not\s+alone|don'?t\s+worry|together|me\s+too|same|yeah|yep|yes|no|ok|okay|got\s+it|understood|i\s+understand|i\s+get\s+it|appreciate|proud\s+of|love\s+you|good\s+(job|work|night|morning)|take\s+care|be\s+well)/i;
+
+/**
+ * Pointing gestures — Joe showing Plex something on the page.
+ * Phrases like "check it out", "this is your X page", "look at this", "here's X".
+ * These should ALWAYS route to observe — she should just look and react.
+ * Checked BEFORE ACTION_VERBS.
+ */
+const SHOW_OVERRIDE = /^(check\s+(it|this)\s+out|this\s+is\s+(your|our)|here'?s|here\s+is|take\s+a\s+look|have\s+a\s+look|look\s+at\s+this|look\s+at\s+that|this\s+is\s+it|there\s+it\s+is|feast\s+your\s+eyes|tis\s+is|tis'?s|heres|check\s+out\s+this|check\s+out\s+that)/i;
 
 export function isActionIntent(
   prompt: string | null,
@@ -199,6 +207,8 @@ export function isActionIntent(
   if (!prompt) return false;
   const p = prompt.trim();
   if (!p) return false;
+  // Pointing gestures — Joe showing her something, always observe
+  if (SHOW_OVERRIDE.test(p)) return false;
   // Emotional/conversational overrides — must check before verb scan
   if (REASSURANCE_OVERRIDE.test(p)) return false;
   if (p.endsWith('?') || QUESTION_OVERRIDE.test(p)) return false;
