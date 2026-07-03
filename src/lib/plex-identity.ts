@@ -4,18 +4,21 @@
  * Identity (who Plex is) comes from plex/prompts/base.md — fetched live.
  * This file is browser-layer context only — never define her identity here.
  *
- * Fallback chain: Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b → OpenRouter :free
+ * Fallback chain:
+ *   Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b → HF Inference (free) → OpenRouter :free
  */
 
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL    = "llama-3.3-70b-versatile";
-export const VISION_MODEL     = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL       = "llama-3.1-8b-instant";
-export const CEREBRAS_MODEL   = "llama-3.3-70b";
-export const CEREBRAS_FAST    = "llama-3.1-8b";
-export const OPENROUTER_FREE  = "openrouter/auto";
+export const PRIMARY_MODEL      = "llama-3.3-70b-versatile";
+export const VISION_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct";
+export const FAST_MODEL         = "llama-3.1-8b-instant";
+export const CEREBRAS_MODEL     = "llama-3.3-70b";
+export const CEREBRAS_FAST      = "llama-3.1-8b";
+export const HF_MODEL           = "meta-llama/Llama-3.1-8B-Instruct"; // free tier
+export const OPENROUTER_FREE    = "meta-llama/llama-3.1-8b-instruct:free"; // genuinely free
+export const OPENROUTER_MAX_TOK = 512; // hard cap — free tier can't afford 1024
 
 // ── Repo coords ──────────────────────────────────────────────────────────────
 export const PLEX_REPO_OWNER  = 'Manitec';
@@ -141,18 +144,6 @@ export function buildObservePrompt(baseIdentity: string, selfRef: boolean): stri
 }
 
 // ── Action-intent detection ───────────────────────────────────────────────────
-//
-// Turbopack (Next.js 16+) does not support multiline regex literals.
-// Kept as new RegExp() string so the parser never sees a line-broken literal.
-//
-// isActionIntent() is the FIRST gate — if it returns false the prompt goes to
-// the observe path. When in doubt, add the verb. The LLM is the real gatekeeper.
-//
-// fromPE override: when the call comes from plex-electron AND an editor is
-// visible on the page (editorInfo.editorType is set), we treat ANY non-empty
-// non-question prompt as action intent — because Joe is sitting in front of a
-// live editor and told her to do something.
-
 const ACTION_VERBS = new RegExp(
   '\\b(click|press|tap|fill|type|enter|submit|go\\s+to|navigate|open|scroll' +
   '|search|select|check|uncheck|toggle|download|find\\s+and\\s+click' +
@@ -165,8 +156,6 @@ const ACTION_VERBS = new RegExp(
   'i'
 );
 
-// Pure-question patterns — these should NOT trigger the action path even if
-// they contain a matching verb (e.g. "what do you want to build?").
 const QUESTION_OVERRIDE = /^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/i;
 
 export function isActionIntent(
@@ -176,13 +165,8 @@ export function isActionIntent(
   if (!prompt) return false;
   const p = prompt.trim();
   if (!p) return false;
-
-  // Never treat a pure question as an action, even from PE
   if (p.endsWith('?') || QUESTION_OVERRIDE.test(p)) return false;
-
-  // PE + visible editor: any non-question prompt is action intent
   if (opts?.fromPE && opts?.hasEditor) return true;
-
   return ACTION_VERBS.test(p);
 }
 
@@ -204,6 +188,8 @@ function isQuotaError(err: any): boolean {
     || message.includes("tokens per day")
     || message.includes("quota")
     || message.includes("upstream")
+    || message.includes("402")         // OpenRouter out-of-credits
+    || status === 402
   );
 }
 
@@ -241,15 +227,32 @@ function makeOAIProvider(baseUrl: string, apiKey: string) {
 function makeCerebras() {
   return makeOAIProvider('https://api.cerebras.ai/v1', process.env.CEREBRAS_API_KEY ?? '');
 }
+
+function makeHuggingFace() {
+  return makeOAIProvider(
+    `https://router.huggingface.co/novita/v1`,
+    process.env.HF_TOKEN ?? ''
+  );
+}
+
 function makeOpenRouter() {
   return makeOAIProvider('https://openrouter.ai/api/v1', process.env.OPENROUTER_API_KEY ?? '');
 }
+
 const OPENROUTER_HEADERS = {
   'HTTP-Referer': 'https://plex-sable.vercel.app',
   'X-Title': 'Plex',
 };
 
-// ── Universal completion — 5-step fallback chain ──────────────────────────────
+// ── Universal completion — 6-step fallback chain ──────────────────────────────
+//
+//   1. Groq 70b
+//   2. Groq 8b
+//   3. Cerebras 70b
+//   4. Cerebras 8b
+//   5. HF Inference (free — never runs out of credits)
+//   6. OpenRouter :free (genuinely free model, hard-capped at OPENROUTER_MAX_TOK)
+//
 export async function completeWithFallback(
   groq: Groq,
   messages: { role: string; content: any }[],
@@ -295,15 +298,30 @@ export async function completeWithFallback(
       return { text, provider: 'cerebras', model: CEREBRAS_FAST };
     } catch (err: any) {
       if (!isQuotaError(err)) throw err;
-      console.warn('[fallback] Cerebras 8b quota → OpenRouter');
+      console.warn('[fallback] Cerebras 8b quota → HF Inference');
     }
   }
 
-  // 5 — OpenRouter
+  // 5 — HuggingFace Inference (free tier — no credits, just rate limits)
+  const hf = makeHuggingFace();
+  if (hf) {
+    try {
+      const text = await hf.complete(HF_MODEL, messages, maxTokens, temperature);
+      return { text, provider: 'hf', model: HF_MODEL };
+    } catch (err: any) {
+      if (!isQuotaError(err)) throw err;
+      console.warn('[fallback] HF Inference quota → OpenRouter');
+    }
+  }
+
+  // 6 — OpenRouter :free (hard-cap tokens to stay within free allowance)
   const openrouter = makeOpenRouter();
   if (openrouter) {
+    const cappedTokens = Math.min(maxTokens, OPENROUTER_MAX_TOK);
     try {
-      const text = await openrouter.complete(OPENROUTER_FREE, messages, maxTokens, temperature, OPENROUTER_HEADERS);
+      const text = await openrouter.complete(
+        OPENROUTER_FREE, messages, cappedTokens, temperature, OPENROUTER_HEADERS
+      );
       return { text, provider: 'openrouter', model: OPENROUTER_FREE };
     } catch (err: any) {
       console.error('[fallback] OpenRouter failed:', err?.message);
@@ -311,7 +329,7 @@ export async function completeWithFallback(
     }
   }
 
-  throw new Error('Groq quota exhausted — add CEREBRAS_API_KEY and OPENROUTER_API_KEY to env.');
+  throw new Error('All providers exhausted — check GROQ_API_KEY, CEREBRAS_API_KEY, HF_TOKEN, OPENROUTER_API_KEY in env.');
 }
 
 // ── observeWithFallback — backwards-compat shim ───────────────────────────────
