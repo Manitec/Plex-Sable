@@ -240,6 +240,26 @@ function isQuotaError(err: any): boolean {
   );
 }
 
+// ── TPM backoff: parse retry-after from Groq error message and wait ───────────
+async function waitForRetry(err: any): Promise<void> {
+  const message = String(err?.message ?? "");
+  // Groq embeds: "Please try again in 21.52s" or "try again in 4m30s"
+  const secMatch = message.match(/try again in\s+(?:(\d+)m)?(\d+(?:\.\d+)?)s/i);
+  let waitMs = 0;
+  if (secMatch) {
+    const mins = parseFloat(secMatch[1] ?? '0');
+    const secs = parseFloat(secMatch[2] ?? '0');
+    waitMs = (mins * 60 + secs) * 1000;
+  }
+  // Add ±10% jitter so parallel requests don't all retry at the same instant
+  const jitter = waitMs * (0.9 + Math.random() * 0.2);
+  const capped  = Math.min(jitter, 60_000); // never wait more than 60s before falling through
+  if (capped > 0) {
+    console.warn(`[backoff] waiting ${Math.round(capped)}ms before fallthrough`);
+    await new Promise(r => setTimeout(r, capped));
+  }
+}
+
 // ── OpenAI-compatible provider factory ───────────────────────────────────────
 function makeOAIProvider(baseUrl: string, apiKey: string) {
   if (!apiKey) return null;
@@ -307,7 +327,8 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 70b quota → Groq 8b');
+    console.warn('[fallback] Groq 70b quota → waiting before Groq 8b');
+    await waitForRetry(err);
   }
 
   // 2 — Groq 8b
@@ -318,7 +339,8 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 8b quota → Cerebras 70b');
+    console.warn('[fallback] Groq 8b quota → waiting before Cerebras 70b');
+    await waitForRetry(err);
   }
 
   // 3 — Cerebras 70b
