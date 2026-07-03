@@ -1,4 +1,4 @@
-// Plex's pen — writes sediment entries to Manitec/plex on her behalf
+// Plex's pen — writes sediment and observe entries to Manitec/plex on her behalf
 
 const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
@@ -6,6 +6,10 @@ const PLEX_REPO_BRANCH = 'main';
 
 function sedimentPath(date: string) {
   return `sediment/${date}.md`;
+}
+
+function observePath(date: string) {
+  return `observe/${date}.md`;
 }
 
 function todayDate() {
@@ -71,11 +75,11 @@ async function putFile(
   }
 }
 
-export async function appendSediment(entry: {
-  mode: string;
-  state: string;
-  note?: string;
-}) {
+async function appendToPath(
+  filePath: string,
+  commitPrefix: string,
+  entry: { mode: string; state: string; note?: string }
+) {
   const token = process.env.PLEX_SEDIMENT_TOKEN;
   if (!token) return; // silently skip if token missing
 
@@ -86,13 +90,13 @@ export async function appendSediment(entry: {
     timeZone: 'America/New_York',
   });
 
-  const path = sedimentPath(date);
+  const path = filePath;
 
   // Retry loop — handles 409 SHA conflicts from concurrent writes
   const MAX_RETRIES = 3;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const existing = await getFile(path, token);
-    const header = existing ? '' : `# sediment — ${date}\n`;
+    const header = existing ? '' : `# ${commitPrefix} — ${date}\n`;
     const newContent = (existing?.content ?? header) + formatEntry({ ...entry, hour });
     const sha = existing?.sha ?? null;
 
@@ -101,18 +105,34 @@ export async function appendSediment(entry: {
         path,
         newContent,
         sha,
-        `sediment: ${entry.mode} — ${entry.state} — ${hour} ET`,
+        `${commitPrefix}: ${entry.mode} — ${entry.state} — ${hour} ET`,
         token
       );
       return; // success
     } catch (err: any) {
       if (err?.status === 409 && attempt < MAX_RETRIES - 1) {
-        // SHA conflict — another write landed between our GET and PUT.
-        // Re-fetch on next iteration with a small backoff.
         await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
         continue;
       }
-      throw err; // surface all other errors (401, 422, 500, final 409)
+      throw err;
     }
   }
+}
+
+export async function appendSediment(entry: {
+  mode: string;
+  state: string;
+  note?: string;
+}) {
+  const date = todayDate();
+  return appendToPath(sedimentPath(date), 'sediment', entry);
+}
+
+export async function appendObserve(entry: {
+  mode: string;
+  state: string;
+  note?: string;
+}) {
+  const date = todayDate();
+  return appendToPath(observePath(date), 'observe', entry);
 }
