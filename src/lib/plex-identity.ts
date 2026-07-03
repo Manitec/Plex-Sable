@@ -16,7 +16,7 @@ export const VISION_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct";
 export const FAST_MODEL         = "llama-3.1-8b-instant";
 export const CEREBRAS_MODEL     = "llama-3.3-70b";
 export const CEREBRAS_FAST      = "llama-3.1-8b";
-export const HF_MODEL           = "meta-llama/Llama-3.1-8B-Instruct"; // free tier
+export const HF_MODEL           = "meta-llama/Llama-3.1-8B-Instruct"; // auto-routed by HF
 export const OPENROUTER_FREE    = "meta-llama/llama-3.1-8b-instruct:free"; // genuinely free
 export const OPENROUTER_MAX_TOK = 512; // hard cap — free tier can't afford 1024
 
@@ -188,7 +188,7 @@ function isQuotaError(err: any): boolean {
     || message.includes("tokens per day")
     || message.includes("quota")
     || message.includes("upstream")
-    || message.includes("402")         // OpenRouter out-of-credits
+    || message.includes("402")
     || status === 402
   );
 }
@@ -229,8 +229,10 @@ function makeCerebras() {
 }
 
 function makeHuggingFace() {
+  // Use the generic HF router — it auto-routes Llama-3.1-8B to deepinfra/scaleway/etc.
+  // Do NOT pin to a specific provider (e.g. /novita/v1) — Novita doesn't carry this model.
   return makeOAIProvider(
-    `https://router.huggingface.co/novita/v1`,
+    'https://router.huggingface.co/v1',
     process.env.HF_TOKEN ?? ''
   );
 }
@@ -250,7 +252,7 @@ const OPENROUTER_HEADERS = {
 //   2. Groq 8b
 //   3. Cerebras 70b
 //   4. Cerebras 8b
-//   5. HF Inference (free — never runs out of credits)
+//   5. HF Inference (free — auto-routed, never runs out of credits)
 //   6. OpenRouter :free (genuinely free model, hard-capped at OPENROUTER_MAX_TOK)
 //
 export async function completeWithFallback(
@@ -302,7 +304,7 @@ export async function completeWithFallback(
     }
   }
 
-  // 5 — HuggingFace Inference (free tier — no credits, just rate limits)
+  // 5 — HuggingFace Inference (free tier, auto-routed)
   const hf = makeHuggingFace();
   if (hf) {
     try {
