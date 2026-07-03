@@ -61,16 +61,19 @@ function isGitHubPage(url: string | null): boolean {
   return !!(url && url.includes('github.com/'));
 }
 
+/** Detect if the GitHub URL is a file view (blob) vs folder view (tree/root) */
+function isGitHubBlob(url: string): boolean {
+  return /github\.com\/[^/]+\/[^/]+\/blob\//.test(url);
+}
+
 /**
  * On GitHub pages, anchor tags are unclickable from Electron's executeJavaScript.
- * Strip them from the elements list entirely so Plex is never tempted to click them.
- * Keep only real form controls: input, textarea, button, [role=button].
+ * Strip them so Plex is never tempted to click them.
  */
 function filterElementsForGitHub(elements: object[]): object[] {
   return elements.filter((el: any) => {
-    const tag = (el.tag ?? '').toLowerCase();
+    const tag  = (el.tag  ?? '').toLowerCase();
     const role = (el.role ?? '').toLowerCase();
-    // Keep inputs, textareas, buttons, role=button — drop all anchors and generic divs
     if (tag === 'a') return false;
     if (tag === 'input' || tag === 'textarea' || tag === 'button') return true;
     if (role === 'button' || role === 'textbox' || role === 'searchbox') return true;
@@ -79,23 +82,29 @@ function filterElementsForGitHub(elements: object[]): object[] {
 }
 
 /**
- * Extract visible file/folder names from GitHub page text and build navigate hints.
- * Looks for lines that look like filenames (contain . or are all-lowercase-hyphen words).
+ * Build navigate hints for GitHub TREE pages only.
+ * On blob (file) pages returns a read hint instead — no navigate URLs.
  */
-function buildGitHubNavigateHint(url: string, pageText: string | null): string {
+function buildGitHubHint(url: string, pageText: string | null): string {
+  // On a file page: tell her to use read, not navigate
+  if (isGitHubBlob(url)) {
+    return `\n\nGITHUB PAGE TYPE: FILE (blob). This is a file view — do NOT navigate deeper. Use action { "action": "read" } to read the file content from the page.`;
+  }
+
   if (!pageText) return '';
-  // Parse current GitHub URL to get owner/repo/tree info
-  const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+))?(\/.*)?/);
+
+  // Parse tree URL: github.com/owner/repo[/tree/branch[/path]]
+  const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree)\/([^/]+))?(\/.*)?/);
   if (!ghMatch) return '';
-  const owner  = ghMatch[1];
-  const repo   = ghMatch[2];
-  const branch = ghMatch[4] ?? 'main';
+  const owner    = ghMatch[1];
+  const repo     = ghMatch[2];
+  const branch   = ghMatch[4] ?? 'main';
   const basePath = (ghMatch[5] ?? '').replace(/^\//, '');
 
-  // Find file/folder names in page text — lines that look like filenames
+  // Find file/folder names in page text
   const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean);
   const fileNames = lines.filter(l =>
-    /^[\w.-]+$/.test(l) && l.length < 80 && l !== owner && l !== repo
+    /^[\w.-]+$/.test(l) && l.length < 80 && l !== owner && l !== repo && l !== branch
   ).slice(0, 20);
 
   if (!fileNames.length) return '';
@@ -107,7 +116,7 @@ function buildGitHubNavigateHint(url: string, pageText: string | null): string {
     return `  ${name} → https://github.com/${owner}/${repo}/${type}/${branch}/${path}`;
   }).join('\n');
 
-  return `\n\nGITHUB NAVIGATE HINTS (use these exact URLs for navigate actions):\n${examples}\nFor any file/folder on this page, construct: https://github.com/${owner}/${repo}/blob|tree/${branch}/${basePath ? basePath + '/' : ''}<name>`;
+  return `\n\nGITHUB PAGE TYPE: FOLDER (tree). Use navigate actions with these exact URLs:\n${examples}\nConstruct: https://github.com/${owner}/${repo}/blob|tree/${branch}/${basePath ? basePath + '/' : ''}<filename>`;
 }
 
 export async function POST(req: NextRequest) {
@@ -147,7 +156,7 @@ export async function POST(req: NextRequest) {
          interactiveElements = [], editorInfo = {} } = body);
     }
 
-    // ── GitHub: strip anchor elements, inject navigate hints ────────────────────
+    // ── GitHub: strip anchor elements, inject navigate/read hints ──────────────────
     const onGitHub = isGitHubPage(url);
     if (onGitHub) {
       interactiveElements = filterElementsForGitHub(interactiveElements);
@@ -221,10 +230,9 @@ export async function POST(req: NextRequest) {
 
       const elementsBlock = interactiveElements.length
         ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — ONLY use selectors from this list):\n${JSON.stringify(interactiveElements, null, 2)}`
-        : "\n\n(No interactive elements — use navigate action only.)"
+        : "\n\n(No interactive elements — use navigate or read actions only.)";
 
-      // On GitHub, inject precomputed navigate URLs so she doesn't need to guess
-      const ghHint = onGitHub ? buildGitHubNavigateHint(url!, pageText) : '';
+      const ghHint = onGitHub ? buildGitHubHint(url!, pageText) : '';
 
       const pageContext = [
         title    ? `Page title: ${title}` : "",
