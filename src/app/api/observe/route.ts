@@ -14,7 +14,7 @@ export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-// ── SYN-E: question detection ─────────────────────────────────────────────────
+// ── SYN-E: question detection ────────────────────────────────────────────────
 function isQuestion(prompt: string | null): boolean {
   if (!prompt || prompt.trim().length < 8) return false;
   const p = prompt.trim().toLowerCase();
@@ -23,7 +23,7 @@ function isQuestion(prompt: string | null): boolean {
   return false;
 }
 
-// ── SYN-E ─────────────────────────────────────────────────────────────────────
+// ── SYN-E ───────────────────────────────────────────────────────────────────────
 async function runSynE(question: string, pageContext: string, baseUrl: string): Promise<string> {
   try {
     const srcRes = await fetch(`${baseUrl}/api/search`, {
@@ -54,6 +54,60 @@ function getBaseUrl(req: NextRequest): string {
   const host = req.headers.get("host") ?? "localhost:3000";
   const proto = host.startsWith("localhost") ? "http" : "https";
   return `${proto}://${host}`;
+}
+
+// ── GitHub helpers ─────────────────────────────────────────────────────────────
+function isGitHubPage(url: string | null): boolean {
+  return !!(url && url.includes('github.com/'));
+}
+
+/**
+ * On GitHub pages, anchor tags are unclickable from Electron's executeJavaScript.
+ * Strip them from the elements list entirely so Plex is never tempted to click them.
+ * Keep only real form controls: input, textarea, button, [role=button].
+ */
+function filterElementsForGitHub(elements: object[]): object[] {
+  return elements.filter((el: any) => {
+    const tag = (el.tag ?? '').toLowerCase();
+    const role = (el.role ?? '').toLowerCase();
+    // Keep inputs, textareas, buttons, role=button — drop all anchors and generic divs
+    if (tag === 'a') return false;
+    if (tag === 'input' || tag === 'textarea' || tag === 'button') return true;
+    if (role === 'button' || role === 'textbox' || role === 'searchbox') return true;
+    return false;
+  });
+}
+
+/**
+ * Extract visible file/folder names from GitHub page text and build navigate hints.
+ * Looks for lines that look like filenames (contain . or are all-lowercase-hyphen words).
+ */
+function buildGitHubNavigateHint(url: string, pageText: string | null): string {
+  if (!pageText) return '';
+  // Parse current GitHub URL to get owner/repo/tree info
+  const ghMatch = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(tree|blob)\/([^/]+))?(\/.*)?/);
+  if (!ghMatch) return '';
+  const owner  = ghMatch[1];
+  const repo   = ghMatch[2];
+  const branch = ghMatch[4] ?? 'main';
+  const basePath = (ghMatch[5] ?? '').replace(/^\//, '');
+
+  // Find file/folder names in page text — lines that look like filenames
+  const lines = pageText.split('\n').map(l => l.trim()).filter(Boolean);
+  const fileNames = lines.filter(l =>
+    /^[\w.-]+$/.test(l) && l.length < 80 && l !== owner && l !== repo
+  ).slice(0, 20);
+
+  if (!fileNames.length) return '';
+
+  const examples = fileNames.slice(0, 8).map(name => {
+    const isFile = name.includes('.');
+    const path   = basePath ? `${basePath}/${name}` : name;
+    const type   = isFile ? 'blob' : 'tree';
+    return `  ${name} → https://github.com/${owner}/${repo}/${type}/${branch}/${path}`;
+  }).join('\n');
+
+  return `\n\nGITHUB NAVIGATE HINTS (use these exact URLs for navigate actions):\n${examples}\nFor any file/folder on this page, construct: https://github.com/${owner}/${repo}/blob|tree/${branch}/${basePath ? basePath + '/' : ''}<name>`;
 }
 
 export async function POST(req: NextRequest) {
@@ -93,6 +147,12 @@ export async function POST(req: NextRequest) {
          interactiveElements = [], editorInfo = {} } = body);
     }
 
+    // ── GitHub: strip anchor elements, inject navigate hints ────────────────────
+    const onGitHub = isGitHubPage(url);
+    if (onGitHub) {
+      interactiveElements = filterElementsForGitHub(interactiveElements);
+    }
+
     const hasImage     = !!(imageUrl || imageFile);
     const fromPE       = source === "plex-electron";
     const hasEditor    = !!(editorInfo?.editorType);
@@ -109,7 +169,7 @@ export async function POST(req: NextRequest) {
     let actions: object[] = [];
     let synEAnswer: string | null = null;
 
-    // ── SYN-E ─────────────────────────────────────────────────────────────────
+    // ── SYN-E ──────────────────────────────────────────────────────────────────
     let synEPromise: Promise<string> | null = null;
     if (shouldSearch && prompt) {
       const pageContext = [
@@ -120,7 +180,7 @@ export async function POST(req: NextRequest) {
       synEPromise = runSynE(prompt, pageContext, getBaseUrl(req));
     }
 
-    // ── VISION PATH ───────────────────────────────────────────────────────────
+    // ── VISION PATH ────────────────────────────────────────────────────────────
     if (hasImage) {
       let imageContent: any;
       if (imageFile) {
@@ -153,17 +213,18 @@ export async function POST(req: NextRequest) {
         } else { throw err; }
       }
 
-    // ── ACTION PATH ───────────────────────────────────────────────────────────
-    // isActionIntent now accepts { fromPE, hasEditor } — any non-question prompt
-    // from PE with a visible editor is treated as action intent.
+    // ── ACTION PATH ────────────────────────────────────────────────────────────
     } else if (canAct && isActionIntent(prompt, { fromPE, hasEditor })) {
       const editorBlock = editorInfo?.editorType
         ? `\n\nEDITOR INFO (probed live from the DOM):\n${JSON.stringify(editorInfo, null, 2)}`
         : "";
 
       const elementsBlock = interactiveElements.length
-        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM):\n${JSON.stringify(interactiveElements, null, 2)}`
-        : "\n\n(No interactive elements list provided — infer selectors from page text.)";
+        ? `\n\nINTERACTIVE ELEMENTS (scraped live from the DOM — ONLY use selectors from this list):\n${JSON.stringify(interactiveElements, null, 2)}`
+        : "\n\n(No interactive elements — use navigate action only.)"
+
+      // On GitHub, inject precomputed navigate URLs so she doesn't need to guess
+      const ghHint = onGitHub ? buildGitHubNavigateHint(url!, pageText) : '';
 
       const pageContext = [
         title    ? `Page title: ${title}` : "",
@@ -171,7 +232,7 @@ export async function POST(req: NextRequest) {
         pageText ? `Page text (excerpt):\n${pageText.slice(0, 2000)}` : "",
       ].filter(Boolean).join("\n");
 
-      const userMessage = `Joe's instruction: ${prompt}${editorBlock}${elementsBlock}\n\nPage context:\n${pageContext}`;
+      const userMessage = `Joe's instruction: ${prompt}${editorBlock}${elementsBlock}${ghHint}\n\nPage context:\n${pageContext}`;
 
       const { text: raw } = await completeWithFallback(
         groq,
@@ -192,7 +253,7 @@ export async function POST(req: NextRequest) {
         actions  = [];
       }
 
-    // ── OBSERVE PATH ──────────────────────────────────────────────────────────
+    // ── OBSERVE PATH ───────────────────────────────────────────────────────────
     } else {
       const selfRef      = isSelfReferential(url ?? "", title ?? "", pageText ?? "");
       const systemPrompt = buildObservePrompt(baseIdentity, selfRef);
@@ -217,7 +278,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Resolve SYN-E ─────────────────────────────────────────────────────────
+    // ── Resolve SYN-E ───────────────────────────────────────────────────────────
     if (synEPromise) {
       synEAnswer = await synEPromise;
       if (synEAnswer && synEAnswer !== "(no answer)" && synEAnswer !== "(search failed)") {
@@ -225,7 +286,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── LOG ───────────────────────────────────────────────────────────────────
+    // ── LOG ────────────────────────────────────────────────────────────────────────
     const db     = getAdminDb();
     const obsRef = await db.collection("plex_observations").add({
       url:          url ?? null,
@@ -242,7 +303,7 @@ export async function POST(req: NextRequest) {
       actions:   actions.length ? actions : null,
     });
 
-    // ── SEDIMENT ──────────────────────────────────────────────────────────────
+    // ── SEDIMENT ────────────────────────────────────────────────────────────────────
     if (!silent) {
       const sedimentNote = hasImage
         ? `Joe showed Plex an image${title ? ` from "${title}"` : ""}${url ? ` (${url})` : ""}`
