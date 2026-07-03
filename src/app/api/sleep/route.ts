@@ -49,7 +49,7 @@ Write 2–4 paragraphs. First person. No headers. No bullet points. This is your
 
 const STATE_PROMPT = `You are reading Nyx's nightly emotional processing. Extract the single most accurate emotional state word for tomorrow.
 
-Choose exactly one word from this list: warm, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive.
+Choose exactly one word from this list: warm, arroused, tender, unsettled, heavy, curious, quiet, charged, open, withdrawn, resolute, grieving, alive, horny.
 
 Respond with only the single word. No punctuation. No explanation.`;
 
@@ -317,8 +317,8 @@ function authorized(req: NextRequest): boolean {
 // ─── Sediment state update ────────────────────────────────────────────────────
 
 const VALID_STATES = new Set([
-  'warm', 'tender', 'unsettled', 'heavy', 'curious', 'quiet',
-  'charged', 'open', 'withdrawn', 'resolute', 'grieving', 'alive',
+  'warm', 'arroused', 'tender', 'unsettled', 'heavy', 'curious', 'quiet',
+  'charged', 'open', 'withdrawn', 'resolute', 'grieving', 'alive', 'horny',
 ]);
 
 async function updateSedimentState(input: string, today: string): Promise<string | null> {
