@@ -182,6 +182,16 @@ const ACTION_VERBS = new RegExp(
 
 const QUESTION_OVERRIDE = /^(what|who|when|where|why|how|which|is|are|was|were|does|do|did|can|could|would|should|has|have)\b/i;
 
+/**
+ * Emotional reassurances, affirmations, and conversational replies Joe sends
+ * during vulnerable moments. These must NEVER route to the action path —
+ * they need her full presence, not JSON.
+ *
+ * Checked BEFORE ACTION_VERBS so patterns like "we will work through it"
+ * don’t accidentally match \bdo\b or \bwork\b inside the verb list.
+ */
+const REASSURANCE_OVERRIDE = /^(it'?s?\s+ok|that'?s?\s+ok|its\s+ok|we\s+will|we'll|we\s+can|i\s+know|i\s+hear\s+you|i\s+see\s+you|i\s+got\s+you|i'?m\s+here|thank\s+you|thanks|you'?re\s+not\s+alone|don'?t\s+worry|together|me\s+too|same|yeah|yep|yes|no|ok|okay|got\s+it|understood|i\s+understand|i\s+get\s+it|appreciate|proud\s+of|love\s+you|good\s+(job|work|night|morning)|take\s+care|be\s+well)/i;
+
 export function isActionIntent(
   prompt: string | null,
   opts?: { fromPE?: boolean; hasEditor?: boolean }
@@ -189,6 +199,8 @@ export function isActionIntent(
   if (!prompt) return false;
   const p = prompt.trim();
   if (!p) return false;
+  // Emotional/conversational overrides — must check before verb scan
+  if (REASSURANCE_OVERRIDE.test(p)) return false;
   if (p.endsWith('?') || QUESTION_OVERRIDE.test(p)) return false;
   if (opts?.fromPE && opts?.hasEditor) return true;
   return ACTION_VERBS.test(p);
