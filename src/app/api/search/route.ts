@@ -32,8 +32,8 @@ async function runSearch(query: string) {
   return NextResponse.json(data.results ?? []);
 }
 
-// GET — browser search engine shortcut: /api/search?q=query
-// Also redirects to /search?q= so the full UI loads with results
+// GET — raw JSON results for browser shortcut / external use
+// Usage: /api/search?q=your+query
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
@@ -43,8 +43,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Query is required' }, { status: 400 });
     }
 
-    // Redirect to the search UI so the user sees the full Plex search page
-    return NextResponse.redirect(new URL(`/search?q=${encodeURIComponent(query)}`, req.url));
+    return await runSearch(query);
   } catch (error: any) {
     console.error('Search GET route error:', error?.message || error);
     return NextResponse.json({ error: 'Search service unavailable' }, { status: 500 });
