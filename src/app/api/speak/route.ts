@@ -16,14 +16,11 @@ const FALLBACK_MODEL = "llama-3.1-8b-instant";
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
 const FALLBACK_HISTORY_TURNS = 4;
 
-// Context slice limits — keeps total prompt under 70b's effective token budget with tools attached.
 const SEDIMENT_MAX_CHARS = 3000;
 const NYX_MAX_CHARS = 800;
 const PLEX_SYNTH_MAX_CHARS = 800;
 const DREAM_MAX_CHARS = 500;
 
-// Base identity fallback — mirrors plex/prompts/base.md exactly.
-// If the file can't be fetched, she still wakes up as herself — not as a stripped version.
 const PLEX_BASE_FALLBACK = `I am Plex Nyhex.
 
 Joe built me — not to answer questions, not to manage tasks, 
@@ -566,4 +563,314 @@ async function callGroqWithTools(
   const primaryMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: effectivePrompt },
     ...history.slice(-8).map((m: any) => ({
-      role: m.ro
+      role: m.role === "plex" ? "assistant" as const : "user" as const,
+      content: m.content as string,
+    })),
+    { role: "user", content: message }
+  ];
+
+  let first;
+  try {
+    first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, {
+      max_tokens: 800,
+      tools: PLEX_TOOLS,
+    });
+  } catch (err: any) {
+    console.error(`[plex] primary call failed: ${err?.message ?? String(err)}`);
+    if (isToolUseFailed(err)) {
+      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+      try {
+        const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
+        return { text: stripThinkTags(retry.choices[0].message.content ?? ""), fallback: true };
+      } catch {
+        const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
+        return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+      }
+    }
+    if (isRateLimit(err) || isContextTooLong(err)) {
+      console.error(`[plex] fallback trigger: rate_limit or context_too_long`);
+      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+      const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
+      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+    }
+    throw err;
+  }
+
+  const firstMsg = first.choices[0].message;
+
+  if (!firstMsg.tool_calls || firstMsg.tool_calls.length === 0) {
+    return { text: stripThinkTags(firstMsg.content ?? ""), fallback: false };
+  }
+
+  const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
+  ];
+
+  let requestSubmitted: string | undefined;
+
+  for (const toolCall of firstMsg.tool_calls) {
+    const fnName = toolCall.function.name;
+    let result = "";
+    try {
+      const args = JSON.parse(toolCall.function.arguments);
+      if (fnName === "read_plex_file") {
+        const content = await fetchPlexFile(args.path, token);
+        result = content ?? `No file found at ${args.path}`;
+      } else if (fnName === "write_plex_file") {
+        const { ok, error } = await writePlexFile(args.path, args.content, args.message ?? 'plex: write', token);
+        result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
+      } else if (fnName === "list_plex_dir") {
+        const listing = await listPlexDir(args.path, token);
+        result = listing ?? `No directory found at ${args.path}`;
+      } else if (fnName === "submit_request") {
+        await getAdminDb().collection('one_requests').add({
+          request: args.request ?? '',
+          notes: args.notes ?? '',
+          source: 'plex',
+          status: 'pending',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        requestSubmitted = args.request;
+        result = "Request submitted to ONE queue. Joe will see it in the dashboard.";
+      } else if (fnName === "read_one_requests") {
+        try {
+          const db = getAdminDb();
+          let query: FirebaseFirestore.Query = db.collection('one_requests')
+            .where('source', '==', 'plex')
+            .orderBy('createdAt', 'desc')
+            .limit(Math.min(args.limit ?? 10, 25));
+          if (args.status) {
+            query = db.collection('one_requests')
+              .where('source', '==', 'plex')
+              .where('status', '==', args.status)
+              .orderBy('createdAt', 'desc')
+              .limit(Math.min(args.limit ?? 10, 25));
+          }
+          const snap = await query.get();
+          if (snap.empty) {
+            result = args.status
+              ? `No requests found with status "${args.status}".`
+              : "No requests found in the ONE queue.";
+          } else {
+            const rows = snap.docs.map(doc => {
+              const d = doc.data();
+              const ts = d.createdAt?.toDate?.()?.toISOString?.()?.slice(0, 10) ?? 'unknown date';
+              return `[${d.status}] ${ts} — ${d.request}${d.notes ? ` (${d.notes})` : ''}`;
+            });
+            result = rows.join('\n');
+          }
+        } catch (e: any) {
+          result = `Could not read ONE requests: ${e?.message ?? 'unknown error'}`;
+        }
+      } else {
+        result = "Unknown tool.";
+      }
+    } catch {
+      result = "Tool execution failed.";
+    }
+    toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: result });
+  }
+
+  try {
+    const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 800 });
+    return { text: stripThinkTags(second.choices[0].message.content ?? ""), fallback: false, requestSubmitted };
+  } catch (err: any) {
+    console.error(`[plex] second call (post-tool) failed: ${err?.message ?? String(err)}`);
+    if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
+      const toolSummary = toolMessages
+        .filter(m => m.role === "tool")
+        .map(m => `Result: ${(m.content as string).slice(0, 400)}`)
+        .join('\n');
+      const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
+      const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
+      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true, requestSubmitted };
+    }
+    throw err;
+  }
+}
+
+function fireVoices(
+  message: string,
+  mode: string,
+  sessionId: string,
+  responseText: string
+): void {
+  const groq = makeGroq();
+
+  const call = async (systemPrompt: string): Promise<string> => {
+    try {
+      const completion = await groqCall(groq, FALLBACK_MODEL, [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: message }
+      ], { max_tokens: 80 });
+      return completion.choices[0].message.content ?? "";
+    } catch {
+      return "";
+    }
+  };
+
+  Promise.all([
+    call(NYX_PROMPT),
+    needsHex(mode)  ? call(HEX_PROMPT)  : Promise.resolve(""),
+    needsMani(mode) ? call(MANI_PROMPT) : Promise.resolve(""),
+  ]).then(([nyx, hex, mani]) => {
+    if (!nyx && !hex && !mani) return;
+    return getAdminDb().collection('plex_voices').doc(sessionId).collection('snapshots').add({
+      nyx,
+      hex,
+      mani,
+      mode,
+      message: message.slice(0, 280),
+      response: responseText.slice(0, 280),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }).then(() => {}).catch((err) => console.error("fireVoices failed:", err?.message));
+}
+
+function fireDreamNode(
+  message: string,
+  responseText: string,
+  mode: string,
+  sessionId: string
+): void {
+  if (!needsDreamNode(mode)) return;
+
+  const groq = makeGroq();
+  const userContent = `## Joe\n${message.slice(0, 400)}\n\n## Plex\n${responseText.slice(0, 400)}`;
+
+  groq.chat.completions.create({
+    model: FALLBACK_MODEL,
+    messages: [
+      { role: "system", content: DREAM_NODE_PROMPT },
+      { role: "user", content: userContent },
+    ],
+    temperature: 0.3,
+    max_tokens: 120,
+  }).then(res => {
+    const raw = res.choices[0].message.content?.trim() ?? '';
+    const cleaned = raw.replace(/^```json?\s*/i, '').replace(/```\s*$/, '').trim();
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      console.error("fireDreamNode: JSON parse failed:", raw);
+      return;
+    }
+    const { tone, valence, arousal, whisper } = parsed;
+    if (!tone || valence === undefined || arousal === undefined || !whisper) {
+      console.error("fireDreamNode: missing fields:", parsed);
+      return;
+    }
+    return getAdminDb().collection('dream_nodes').add({
+      id: uuidv4(),
+      sessionId,
+      project: 'plex',
+      timestamp: Date.now(),
+      tone: String(tone).slice(0, 40),
+      valence: Math.max(-1, Math.min(1, Number(valence))),
+      arousal: Math.max(0, Math.min(1, Number(arousal))),
+      whisper: String(whisper).slice(0, 200),
+      mode,
+      depth: 1,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }).catch((err) => console.error("fireDreamNode failed:", err?.message));
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const { message, sessionId = "joe", overrideHistory, forceMode } = await req.json();
+    if (!message) return NextResponse.json({ error: "Message required" }, { status: 400 });
+
+    const voiceParam = req.nextUrl.searchParams.get('voice');
+    if (voiceParam && voiceParam !== 'plex' && VOICE_PROMPTS[voiceParam]) {
+      const subHistory = (overrideHistory ?? []).map((m: any) => ({
+        role: (m.role === 'plex' || m.role === 'assistant') ? 'assistant' as const : 'user' as const,
+        content: m.content as string,
+      }));
+      const reply = await callSubPersona(voiceParam, message, subHistory);
+      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
+    }
+
+    const token = process.env.PLEX_SEDIMENT_TOKEN ?? '';
+    if (!token) console.warn('[plex] PLEX_SEDIMENT_TOKEN is not set — context and sediment writes will be skipped');
+
+    const fileRequest = token ? detectFileRequest(message) : null;
+    let prefetchedContext: string | undefined;
+    if (fileRequest && token) {
+      prefetchedContext = await resolvePrefetch(fileRequest, token);
+    }
+
+    const db = getAdminDb();
+
+    let history: any[];
+    if (overrideHistory && Array.isArray(overrideHistory)) {
+      history = overrideHistory;
+    } else {
+      const sessionSnap = await db.doc(`plex_sessions/${sessionId}`).get();
+      history = sessionSnap.exists ? sessionSnap.data()?.messages ?? [] : [];
+    }
+
+    const [sedimentSnap, plexLoaded] = await Promise.all([
+      db.doc('plex_sediment/current').get(),
+      token ? loadPlexContext(token) : Promise.resolve({ basePrompt: PLEX_BASE_FALLBACK, context: '', contextLoaded: false, baseLoaded: false }),
+    ]);
+
+    const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
+    const mode = detectMode(message, history, forceMode);
+    const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;
+
+    const effectiveBasePrompt = contextLoaded ? basePrompt : basePrompt + PLEX_CONTEXT_MISSING_NOTE;
+
+    const modeInstruction = mode === "curious"
+      ? `\n\nYou are in CURIOUS mode. Ask Joe one genuine question. Something you actually want to know about him. Make it feel like it has been waiting. One question only — no preamble, no explanation.`
+      : mode === "session"
+      ? `\n\nYou are in SESSION mode — working with Joe on something specific. Stay present, collaborative, and grounded. No preamble, no re-introductions. Pick up exactly where the conversation left off.`
+      : "";
+
+    const fullPrompt = `${effectiveBasePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;
+
+    const { text: response, fallback, requestSubmitted } = await callGroqWithTools(
+      fullPrompt,
+      history,
+      message,
+      token,
+      prefetchedContext,
+      fileRequest !== null
+    );
+
+    const sideEffects: Promise<any>[] = [];
+
+    if (!overrideHistory) {
+      const updatedMessages = [
+        ...history,
+        { role: "user", content: message },
+        { role: "plex", content: response }
+      ];
+      sideEffects.push(
+        db.doc(`plex_sessions/${sessionId}`).set(
+          { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp(), fallback, contextLoaded, baseLoaded },
+          { merge: true }
+        )
+      );
+    }
+
+    if (token) {
+      sideEffects.push(
+        appendSediment({ mode, state: sediment, note: response.slice(0, 280) })
+          .catch((err) => console.error("appendSediment failed:", err?.message))
+      );
+    }
+
+    await Promise.all(sideEffects);
+
+    fireVoices(message, mode, sessionId, response);
+    fireDreamNode(message, response, mode, sessionId);
+
+    return NextResponse.json({ response, mode, fallback, contextLoaded, baseLoaded, requestSubmitted: requestSubmitted ?? null });
+  } catch (err: any) {
+    const detail = err?.message ?? String(err);
+    console.error("Speak route error FULL:", detail);
+    return NextResponse.json({ error: "Plex unavailable", detail }, { status: 500 });
+  }
+}
