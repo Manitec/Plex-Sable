@@ -29,43 +29,73 @@ function SearchInner() {
   const [sources, setSources] = useState<{ title: string; url: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [autoQuery, setAutoQuery] = useState<string | null>(null);
   const didAutoSearch = useRef(false);
 
   const runSearch = async (q: string, searchMode: 'web' | 'images' = 'web') => {
     if (!q.trim()) return;
     setLoading(true);
     setSearched(true);
+    setError(null);
     setAnswer(null);
     setSources([]);
     setWebResults([]);
     setImageResults([]);
 
-    if (searchMode === 'web') {
-      const res = await fetch('/api/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q })
-      });
-      const results = await res.json();
-      setWebResults(results);
-
-      if (Array.isArray(results) && results.length > 0) {
-        const answerRes = await fetch('/api/answer', {
+    try {
+      if (searchMode === 'web') {
+        const res = await fetch('/api/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: q, results })
+          body: JSON.stringify({ query: q })
         });
-        const answerData = await answerRes.json();
-        setAnswer(answerData.answer ?? null);
-        setSources(answerData.sources ?? []);
+
+        const results = await res.json();
+
+        if (!res.ok || results?.error) {
+          setError(results?.error ?? `search failed (status ${res.status})`);
+          setLoading(false);
+          return;
+        }
+
+        setWebResults(results);
+
+        if (Array.isArray(results) && results.length > 0) {
+          try {
+            const answerRes = await fetch('/api/answer', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ query: q, results })
+            });
+            const answerData = await answerRes.json();
+            if (answerRes.ok && !answerData?.error) {
+              setAnswer(answerData.answer ?? null);
+              setSources(answerData.sources ?? []);
+            }
+          } catch {
+            // synthesis failure is non-fatal — results still show
+          }
+        }
+      } else {
+        const res = await fetch('/api/images', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: q })
+        });
+
+        const results = await res.json();
+
+        if (!res.ok || results?.error) {
+          setError(results?.error ?? `image search failed (status ${res.status})`);
+          setLoading(false);
+          return;
+        }
+
+        setImageResults(Array.isArray(results) ? results : []);
       }
-    } else {
-      const res = await fetch('/api/images', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q })
-      });
-      setImageResults(await res.json());
+    } catch (err: any) {
+      setError(err?.message ?? 'search service unreachable');
     }
 
     setLoading(false);
@@ -76,6 +106,7 @@ function SearchInner() {
     if (urlQuery && !didAutoSearch.current) {
       didAutoSearch.current = true;
       setQuery(urlQuery);
+      setAutoQuery(urlQuery);
       runSearch(urlQuery, 'web');
     }
   }, [searchParams]);
@@ -89,6 +120,7 @@ function SearchInner() {
     setImageResults([]);
     setAnswer(null);
     setSources([]);
+    setError(null);
   };
 
   const tabActive: React.CSSProperties = {
@@ -117,9 +149,11 @@ function SearchInner() {
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--muted)', opacity: 0.35, marginBottom: '0.4rem' }}>
             // initializing search protocol
           </div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--muted)', opacity: 0.25, display: 'flex', gap: '1.5rem' }}>
-            <span>LAST_LOGIN: {new Date().toLocaleString()}</span>
-            <span>STATUS: <span style={{ color: 'var(--accent)', opacity: 0.8 }}>OK</span></span>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--muted)', opacity: 0.25, display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+            {autoQuery && (
+              <span>QUERY: <span style={{ color: 'var(--accent)', opacity: 0.9 }}>{autoQuery}</span></span>
+            )}
+            <span>STATUS: <span style={{ color: error ? '#ff6b6b' : 'var(--accent)', opacity: 0.8 }}>{error ? 'ERR' : loading ? 'SEARCHING' : searched ? 'OK' : 'READY'}</span></span>
             <span style={{ animation: 'blink 1s step-end infinite' }}>_</span>
           </div>
         </div>
@@ -141,13 +175,15 @@ function SearchInner() {
           />
           <button
             onClick={handleSearch}
+            disabled={loading}
             style={{
-              background: 'var(--accent)', color: 'var(--bg)', border: 'none',
+              background: loading ? 'var(--border)' : 'var(--accent)',
+              color: 'var(--bg)', border: 'none',
               padding: '0.7rem 1.4rem', fontFamily: 'var(--font-mono)',
               fontSize: '0.75rem', letterSpacing: '0.1em',
-              textTransform: 'uppercase', cursor: 'pointer',
+              textTransform: 'uppercase', cursor: loading ? 'not-allowed' : 'pointer',
             }}
-          >execute_</button>
+          >{loading ? 'scanning_' : 'execute_'}</button>
         </div>
 
         {/* Mode tabs */}
@@ -155,6 +191,14 @@ function SearchInner() {
           <button style={mode === 'web' ? tabActive : tabInactive} onClick={() => switchMode('web')}>web</button>
           <button style={mode === 'images' ? tabActive : tabInactive} onClick={() => switchMode('images')}>images</button>
         </div>
+
+        {/* Error state */}
+        {error && (
+          <div style={{ borderLeft: '2px solid #ff6b6b', paddingLeft: '1rem', marginBottom: '2rem' }}>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: '#ff6b6b', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.1em' }}>// search error</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--muted)', opacity: 0.7 }}>{error}</div>
+          </div>
+        )}
 
         {/* Loading */}
         {loading && (
@@ -166,7 +210,8 @@ function SearchInner() {
         {/* Synthesized answer */}
         {!loading && answer && (
           <div style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '1.5rem 0', marginBottom: '2.5rem' }}>
-            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', opacity: 0.65, marginBottom: '1rem' }}>plex // synthesis</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', opacity: 0.65, marginBottom: '0.5rem' }}>plex // synthesis</div>
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', color: 'var(--muted)', opacity: 0.3, marginBottom: '1rem' }}>via search engine · plex synthesis layer</div>
             <p style={{ fontFamily: 'var(--font-garamond)', fontStyle: 'italic', color: 'var(--text)', fontSize: '1rem', lineHeight: 1.85, margin: '0 0 1.25rem', whiteSpace: 'pre-wrap' }}>{answer}</p>
             {sources.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -181,7 +226,7 @@ function SearchInner() {
         )}
 
         {/* No results */}
-        {!loading && searched && mode === 'web' && webResults.length === 0 && (
+        {!loading && !error && searched && mode === 'web' && webResults.length === 0 && (
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--muted)', opacity: 0.35 }}>// no results found.</div>
         )}
 
@@ -197,7 +242,7 @@ function SearchInner() {
         ))}
 
         {/* Image results */}
-        {!loading && searched && mode === 'images' && imageResults.length === 0 && (
+        {!loading && !error && searched && mode === 'images' && imageResults.length === 0 && (
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem', color: 'var(--muted)', opacity: 0.35 }}>// no images found.</div>
         )}
 
