@@ -3,7 +3,6 @@ import Groq from "groq-sdk";
 import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
-import { appendSediment } from "@/lib/github";
 import { makeGroq } from "@/lib/plex-identity";
 
 const PLEX_REPO_OWNER = 'Manitec';
@@ -852,13 +851,6 @@ export async function POST(req: NextRequest) {
           { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp(), fallback, contextLoaded, baseLoaded },
           { merge: true }
         )
-      );
-    }
-
-    if (token) {
-      sideEffects.push(
-        appendSediment({ mode, state: sediment, note: response.slice(0, 280) })
-          .catch((err) => console.error("appendSediment failed:", err?.message))
       );
     }
 
