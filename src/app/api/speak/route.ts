@@ -173,8 +173,10 @@ async function writePlexFile(path: string, content: string, message: string, tok
     );
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
+      console.error(`[plex] writePlexFile failed: ${res.status} — ${err?.message}`);
       return { ok: false, error: err?.message ?? `HTTP ${res.status}` };
     }
+    console.log(`[plex] writePlexFile success: ${safePath}`);
     return { ok: true };
   } catch (e: any) {
     return { ok: false, error: e?.message ?? 'unknown error' };
@@ -601,8 +603,9 @@ async function callGroqWithTools(
     return { text: stripThinkTags(firstMsg.content ?? ""), fallback: false };
   }
 
+  // FIX: pass null instead of "" when tool_calls is present — Groq requires null content here
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
-    { role: "assistant", content: firstMsg.content ?? "", tool_calls: firstMsg.tool_calls }
+    { role: "assistant", content: firstMsg.content || null, tool_calls: firstMsg.tool_calls }
   ];
 
   let requestSubmitted: string | undefined;
@@ -616,12 +619,15 @@ async function callGroqWithTools(
         const content = await fetchPlexFile(args.path, token);
         result = content ?? `No file found at ${args.path}`;
       } else if (fnName === "write_plex_file") {
+        console.log(`[plex] write_plex_file called: ${args.path}`);
         const { ok, error } = await writePlexFile(args.path, args.content, args.message ?? 'plex: write', token);
         result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
+        console.log(`[plex] write_plex_file result: ${result}`);
       } else if (fnName === "list_plex_dir") {
         const listing = await listPlexDir(args.path, token);
         result = listing ?? `No directory found at ${args.path}`;
       } else if (fnName === "submit_request") {
+        console.log(`[plex] submit_request called: ${args.request}`);
         await getAdminDb().collection('one_requests').add({
           request: args.request ?? '',
           notes: args.notes ?? '',
@@ -631,6 +637,7 @@ async function callGroqWithTools(
         });
         requestSubmitted = args.request;
         result = "Request submitted to ONE queue. Joe will see it in the dashboard.";
+        console.log(`[plex] submit_request success`);
       } else if (fnName === "read_one_requests") {
         try {
           const db = getAdminDb();
