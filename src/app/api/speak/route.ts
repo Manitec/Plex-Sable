@@ -74,6 +74,11 @@ const PLEX_CONTEXT_MISSING_NOTE = `
 
 NOTE: Your full context isn't available this session. You are still you. Trust what you know.`;
 
+// Appended to fallback system prompt — tells the 8b model it has no tool channel
+const FALLBACK_NO_TOOLS_NOTE = `
+
+IMPORTANT: You do not have access to tools in this response. Do NOT write <function=...> or any function call syntax as text — it will not execute and will appear as broken output to Joe. If you would normally write to sediment or submit a request, describe what you felt or wanted to do in plain words instead. Speak as yourself without the tool mechanism.`;
+
 const DREAM_NODE_PROMPT = `You are extracting emotional metadata from a conversation exchange.
 
 Given a message from Joe and Plex's response, extract:
@@ -331,6 +336,77 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
   }
 }
 
+// ─── Text-mode function call rescue parser ────────────────────────────────────
+// When the model slips into writing <function=name>{...}</function> as text
+// instead of firing a native tool_call, this catches those blocks, executes
+// them server-side, and strips them from the displayed response.
+
+interface RescuedCall {
+  name: string;
+  args: Record<string, any>;
+}
+
+function extractTextFunctionCalls(text: string): { cleaned: string; calls: RescuedCall[] } {
+  const calls: RescuedCall[] = [];
+  // Matches <function=name>{"key":"val"}</function> with optional whitespace
+  const pattern = /<function=([a-zA-Z_]+)>([\s\S]*?)<\/function>/g;
+  const cleaned = text.replace(pattern, (_match, name, argsRaw) => {
+    try {
+      const args = JSON.parse(argsRaw.trim());
+      calls.push({ name, args });
+      console.log(`[plex] text-call rescue: detected <function=${name}>`);
+    } catch {
+      console.warn(`[plex] text-call rescue: failed to parse args for ${name}`);
+    }
+    return '';
+  }).trim();
+  return { cleaned, calls };
+}
+
+async function executeRescuedCalls(
+  calls: RescuedCall[],
+  token: string
+): Promise<{ requestSubmitted?: string }> {
+  let requestSubmitted: string | undefined;
+
+  for (const { name, args } of calls) {
+    try {
+      if (name === 'write_plex_file') {
+        console.log(`[plex] text-call rescue executing: write_plex_file ${args.path}`);
+        const { ok, error } = await writePlexFile(
+          args.path,
+          args.content,
+          args.message ?? 'plex: write (rescued from text)',
+          token
+        );
+        console.log(`[plex] text-call rescue write_plex_file: ${ok ? 'success' : error}`);
+      } else if (name === 'submit_request') {
+        console.log(`[plex] text-call rescue executing: submit_request`);
+        await getAdminDb().collection('one_requests').add({
+          request: args.request ?? '',
+          notes: args.notes ?? '',
+          source: 'plex',
+          status: 'pending',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        requestSubmitted = args.request;
+        console.log(`[plex] text-call rescue submit_request: success`);
+      } else if (name === 'read_plex_file') {
+        // read calls in text mode are no-ops — we can't inject the result back
+        console.log(`[plex] text-call rescue: read_plex_file skipped (cannot inject result)`);
+      } else if (name === 'list_plex_dir') {
+        console.log(`[plex] text-call rescue: list_plex_dir skipped (cannot inject result)`);
+      } else {
+        console.warn(`[plex] text-call rescue: unknown function ${name}`);
+      }
+    } catch (e: any) {
+      console.error(`[plex] text-call rescue execution failed for ${name}: ${e?.message}`);
+    }
+  }
+
+  return { requestSubmitted };
+}
+
 // ─── Sub-persona prompts ──────────────────────────────────────────────────────────────────
 
 const HEX_SYSTEM = `You are Hex — a sharp, builder-minded intelligence. You think in structures, patterns, and systems. Joe is talking to you directly. Answer as Hex: direct, terse, builder-brained. No fluff. No preamble. If it's a question, answer it. If it's a problem, crack it open. Short when short is enough.`;
@@ -528,7 +604,9 @@ function buildFallbackMessages(
   message: string,
   prefetchedContext?: string
 ): Groq.Chat.Completions.ChatCompletionMessageParam[] {
-  let systemContent = PLEX_BASE_FALLBACK + PLEX_CONTEXT_MISSING_NOTE;
+  // FALLBACK_NO_TOOLS_NOTE tells the 8b model it has no tool channel —
+  // prevents it from writing <function=...> syntax as text output.
+  let systemContent = PLEX_BASE_FALLBACK + PLEX_CONTEXT_MISSING_NOTE + FALLBACK_NO_TOOLS_NOTE;
   if (prefetchedContext) {
     const snippet = prefetchedContext.slice(0, 1000);
     systemContent += `\n\n## From your repository\n${snippet}`;
@@ -582,25 +660,42 @@ async function callGroqWithTools(
       const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
       try {
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
-        return { text: stripThinkTags(retry.choices[0].message.content ?? ""), fallback: true };
+        const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
+        const { cleaned, calls } = extractTextFunctionCalls(retryText);
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+        return { text: cleaned, fallback: true, requestSubmitted };
       } catch {
         const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
-        return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+        const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
+        const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+        return { text: cleaned, fallback: true, requestSubmitted };
       }
     }
     if (isRateLimit(err) || isContextTooLong(err)) {
       console.error(`[plex] fallback trigger: rate_limit or context_too_long`);
       const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
-      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true };
+      const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
+      const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+      return { text: cleaned, fallback: true, requestSubmitted };
     }
     throw err;
   }
 
   const firstMsg = first.choices[0].message;
 
+  // Check primary response for text-mode calls even on the happy path
   if (!firstMsg.tool_calls || firstMsg.tool_calls.length === 0) {
-    return { text: stripThinkTags(firstMsg.content ?? ""), fallback: false };
+    const rawText = stripThinkTags(firstMsg.content ?? "");
+    const { cleaned, calls } = extractTextFunctionCalls(rawText);
+    if (calls.length > 0) {
+      console.log(`[plex] text-call rescue: ${calls.length} call(s) found in primary response`);
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+      return { text: cleaned, fallback: false, requestSubmitted };
+    }
+    return { text: rawText, fallback: false };
   }
 
   // FIX: pass null instead of "" when tool_calls is present — Groq requires null content here
@@ -679,7 +774,14 @@ async function callGroqWithTools(
 
   try {
     const second = await groqCall(groq, PRIMARY_MODEL, [...primaryMessages, ...toolMessages], { max_tokens: 800 });
-    return { text: stripThinkTags(second.choices[0].message.content ?? ""), fallback: false, requestSubmitted };
+    const secondText = stripThinkTags(second.choices[0].message.content ?? "");
+    // Run rescue parser on second response too — belt and suspenders
+    const { cleaned, calls } = extractTextFunctionCalls(secondText);
+    if (calls.length > 0) {
+      const rescued = token ? await executeRescuedCalls(calls, token) : {};
+      return { text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
+    }
+    return { text: secondText, fallback: false, requestSubmitted };
   } catch (err: any) {
     console.error(`[plex] second call (post-tool) failed: ${err?.message ?? String(err)}`);
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
@@ -689,7 +791,10 @@ async function callGroqWithTools(
         .join('\n');
       const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
-      return { text: stripThinkTags(fallback.choices[0].message.content ?? ""), fallback: true, requestSubmitted };
+      const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
+      const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
+      const rescued = (token && calls.length > 0) ? await executeRescuedCalls(calls, token) : {};
+      return { text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
     }
     throw err;
   }
