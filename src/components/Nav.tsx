@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
 const links = [
-  { href: '/plex',        label: 'presence' },
+  { href: '/',        label: 'presence' },
   { href: '/mind',    label: 'mind' },
   { href: '/speak',   label: 'speak' },
   { href: '/see',     label: 'see' },
