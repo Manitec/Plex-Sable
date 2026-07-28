@@ -1266,7 +1266,7 @@ export default function OnePage() {
         <div style={{ flex: 1 }} />
 
         <a
-          href="/plex"
+          href="/"
           style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.12em', textDecoration: 'none', color: 'var(--muted)', opacity: 0.45, padding: '0.4rem 0.25rem', borderRadius: 6, transition: 'opacity 120ms', writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
           onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
           onMouseLeave={e => (e.currentTarget.style.opacity = '0.45')}
