@@ -59,6 +59,14 @@ function cleanPath(path: string): string {
   return path.replace(/^\/+/, '');
 }
 
+// ─── Paths that should NEVER be silently overwritten — always append ──────────
+// sediment/YYYY-MM-DD.md and dreams/YYYY-MM-DD.md are append-only logs.
+// plex-is.txt and plex-def.txt are full-replace identity files (Plex owns them).
+function isAppendOnlyPath(path: string): boolean {
+  const p = cleanPath(path);
+  return /^sediment\/\d{4}-\d{2}-\d{2}\.md$/.test(p) || /^dreams\/\d{4}-\d{2}-\d{2}\.md$/.test(p);
+}
+
 async function fetchPlexFile(path: string, token: string): Promise<string | null> {
   try {
     const safePath = cleanPath(path);
@@ -130,6 +138,32 @@ async function writePlexFile(path: string, content: string, message: string, tok
     console.log(`[plex] writePlexFile success: ${safePath}`);
     return { ok: true };
   } catch (e: any) {
+    return { ok: false, error: e?.message ?? 'unknown error' };
+  }
+}
+
+// ─── appendPlexFile ───────────────────────────────────────────────────────────
+// For sediment and dream files: read the existing content, append the new entry,
+// then write the combined result. Safe for concurrent sessions — always fetches
+// fresh SHA immediately before writing so there are no stale-SHA conflicts.
+// For non-append-only paths this falls through to writePlexFile (full replace).
+async function appendPlexFile(
+  path: string,
+  newEntry: string,
+  message: string,
+  token: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isAppendOnlyPath(path)) {
+    // Identity files and other paths: full replace as before
+    return writePlexFile(path, newEntry, message, token);
+  }
+  try {
+    const existing = await fetchPlexFile(path, token) ?? '';
+    const combined = existing ? `${existing}\n\n${newEntry}` : newEntry;
+    console.log(`[plex] appendPlexFile: ${cleanPath(path)} (existing ${existing.length} chars + ${newEntry.length} new)`);
+    return writePlexFile(path, combined, message, token);
+  } catch (e: any) {
+    console.error(`[plex] appendPlexFile failed: ${e?.message}`);
     return { ok: false, error: e?.message ?? 'unknown error' };
   }
 }
@@ -339,7 +373,8 @@ async function executeRescuedCalls(
     try {
       if (name === 'write_plex_file') {
         console.log(`[plex] text-call rescue executing: write_plex_file ${args.path}`);
-        const { ok, error } = await writePlexFile(
+        // Use appendPlexFile so rescued sediment/dream writes are also append-safe
+        const { ok, error } = await appendPlexFile(
           args.path,
           args.content,
           args.message ?? 'plex: write (rescued from text)',
@@ -451,12 +486,12 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "write_plex_file",
-      description: "Write or update a file in the Manitec/plex repository. Use this to save sediment entries, update identity files, record dreams, or persist anything that matters. Creates the file if it does not exist; updates it if it does.",
+      description: "Write or update a file in the Manitec/plex repository. For sediment (sediment/YYYY-MM-DD.md) and dream (dreams/YYYY-MM-DD.md) files, pass only the NEW ENTRY you want to add — the server will append it to the existing file automatically. Do NOT reconstruct or re-pass the full file contents for these paths. For identity files (plex-is.txt, plex-def.txt) and any other path, pass the full desired content as usual.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string", description: "File path within the Manitec/plex repo without leading slash. Examples: 'sediment/2026-07-01.md', 'plex-is.txt'" },
-          content: { type: "string", description: "Full content to write to the file." },
+          content: { type: "string", description: "For sediment/dream paths: the new entry only (will be appended). For all other paths: full file content." },
           message: { type: "string", description: "Commit message describing what was written and why." }
         },
         required: ["path", "content", "message"]
@@ -686,7 +721,8 @@ async function callGroqWithTools(
         result = content ?? `No file found at ${args.path}`;
       } else if (fnName === "write_plex_file") {
         console.log(`[plex] write_plex_file called: ${args.path}`);
-        const { ok, error } = await writePlexFile(args.path, args.content, args.message ?? 'plex: write', token);
+        // appendPlexFile handles sediment/dream paths safely; falls through for identity files
+        const { ok, error } = await appendPlexFile(args.path, args.content, args.message ?? 'plex: write', token);
         result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
         console.log(`[plex] write_plex_file result: ${result}`);
       } else if (fnName === "list_plex_dir") {
