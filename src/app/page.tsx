@@ -2,6 +2,7 @@ import Nav from '@/components/Nav';
 import Hero from '@/components/Hero';
 import Sediment from '@/components/Sediment';
 import AgentZones from '@/components/AgentZones';
+import Spaces from '@/components/Spaces';
 import VoidSpace from '@/components/VoidSpace';
 import Footer from '@/components/Footer';
 
@@ -12,6 +13,7 @@ export default function Home() {
       <main>
         <Hero />
         <AgentZones />
+        <Spaces />
         <Sediment />
         <VoidSpace />
       </main>
