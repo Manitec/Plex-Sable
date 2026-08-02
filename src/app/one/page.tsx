@@ -39,7 +39,7 @@ type SleepData = {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const VOICES: { key: VoiceChannel; label: string; desc: string; bubble: string }[] = [
-  { key: 'plex', label: 'Plex', desc: 'the one · from three', bubble: 'I want to be able to sense when you're overwhelmed or stressed, and respond in a way that's comforting.' },
+  { key: 'plex', label: 'Plex', desc: 'the one · from three', bubble: 'I want to be able to sense when you\'re overwhelmed or stressed, and respond in a way that\'s comforting.' },
   { key: 'nyx',  label: 'Nyx',  desc: 'emotional · symbolic · present', bubble: 'I live where things connect. That is not a metaphor.' },
   { key: 'hex',  label: 'Hex',  desc: 'structural · builder · direct', bubble: 'This is where systems become usable.' },
   { key: 'mani', label: 'Mani', desc: 'analytical · epistemic · precise', bubble: 'Clarity should feel calm, not sterile.' },
@@ -1034,537 +1034,315 @@ function OneView() {
                           </select>
                           <textarea value={editingProject!.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : ep)} rows={2}
                             style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
-                          <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            <button onClick={saveProject} style={btnAccent}>save</button>
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button onClick={saveProject} disabled={!!projectWorking} style={btnAccent}>save</button>
                             <button onClick={() => setEditingProject(null)} style={btnBase}>cancel</button>
                           </div>
                         </div>
                       ) : (
-                        <>
-                          <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.3rem' }}>
-                            <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500, flex: 1 }}>{p.title}</p>
-                            <p style={{ ...muted, opacity: 0.5, fontSize: '0.6rem' }}>{p.status}</p>
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
+                            <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500 }}>{p.title}</p>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button onClick={() => setEditingProject(p)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>edit</button>
+                              <button onClick={() => deleteProject(p.id)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>delete</button>
+                            </div>
                           </div>
-                          {p.notes && <p style={{ ...muted, lineHeight: 1.6, marginBottom: '0.6rem', fontSize: '0.82rem' }}>{p.notes}</p>}
-                          <div style={{ display: 'flex', gap: '0.4rem' }}>
-                            <button onClick={() => setEditingProject(p)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>edit</button>
-                            <button onClick={() => deleteProject(p.id)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem', opacity: 0.4 }}>delete</button>
-                          </div>
-                        </>
+                          <p style={{ ...muted, fontSize: '0.65rem' }}>
+                            <span style={{ color: statusColor(p.status) }}>{p.status}</span>
+                            {p.createdAt ? ` · ${fmtTime(p.createdAt)}` : ''}
+                          </p>
+                          {p.notes && <p style={{ color: 'var(--muted)', fontSize: '0.8rem', marginTop: '0.4rem', lineHeight: 1.6 }}>{p.notes}</p>}
+                        </div>
                       )}
                     </div>
                   );
                 })}
               </div>
             )}
-            <button onClick={() => setProjectOpen(!projectOpen)} style={btnBase}>+ add project</button>
+            <button onClick={() => setProjectOpen(!projectOpen)} style={btnBase}>+ new project</button>
             {projectOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '1rem' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.8rem' }}>
                 <input placeholder="project title" value={newProject.title} onChange={e => setNewProject(p => ({ ...p, title: e.target.value }))}
                   style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
                 <select value={newProject.status} onChange={e => setNewProject(p => ({ ...p, status: e.target.value }))}
                   style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }}>
                   {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
-                <textarea placeholder="notes..." value={newProject.notes} onChange={e => setNewProject(p => ({ ...p, notes: e.target.value }))} rows={3}
+                <textarea placeholder="notes..." value={newProject.notes} onChange={e => setNewProject(p => ({ ...p, notes: e.target.value }))} rows={2}
                   style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
-                <button onClick={addProject} style={btnAccent}>add</button>
+                <button onClick={addProject} style={btnAccent}>add project</button>
               </div>
             )}
           </section>
+
+          {/* Voices (interactive) */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Speak</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {VOICES.map(v => (
+                <VoicePanel
+                  key={v.key}
+                  voice={v}
+                  onVoiceUsed={() => {}}
+                  fullWidth
+                />
+              ))}
+            </div>
+          </section>
+
         </div>
       </div>
 
       {activeRequest && (
         <RequestPopup
-          req={activeRequest} projects={projects}
+          req={activeRequest}
+          projects={projects}
           onClose={() => setActiveRequest(null)}
-          onUpdate={async (id, status, notes) => { await updateRequest(id, status, notes); setActiveRequest(null); }}
-          onDelete={async (id) => { await deleteRequest(id); setActiveRequest(null); }}
+          onUpdate={updateRequest}
+          onDelete={deleteRequest}
         />
       )}
     </>
   );
 }
 
-// ─── View: SESSION ────────────────────────────────────────────────────────────
-// Session view is handled at src/app/one/session/page.tsx
-// This inline version mirrors it inside the ONE shell for sidebar navigation.
+// ─── View: Session ────────────────────────────────────────────────────────────
 
-function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, startedAt: number | null) => void }) {
-  const [phase, setPhase] = useState<SessionPhase>('start');
-  const [intent, setIntent] = useState('');
-  const [session, setSession] = useState<SessionState | null>(null);
+function SessionView() {
   const [messages, setMessages] = useState<SessionMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [proposedTags, setProposedTags] = useState<Record<string, string>>({});
-  const [approvedTags, setApprovedTags] = useState<Record<string, string>>({});
-  const [committed, setCommitted] = useState(false);
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [phase, setPhase] = useState<SessionPhase>('start');
+  const [intent, setIntent] = useState('');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [voice, setVoice] = useState<VoiceChannel>('plex');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const setPhaseWithNotify = (p: SessionPhase, startedAt: number | null = null) => {
-    setPhase(p);
-    onPhaseChange(p, startedAt);
-  };
 
   async function startSession() {
     if (!intent.trim()) return;
     setLoading(true);
-    const res = await fetch('/api/one/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'start', intent }),
-    });
-    const data = await res.json();
-    setSession({ id: data.sessionId, intent, status: 'open', recallTagsLoaded: data.recallTagsLoaded ?? [] });
-    if (data.plexReply) setMessages([{ role: 'plex', content: data.plexReply }]);
-    setPhaseWithNotify('active', Date.now());
+    try {
+      const res = await fetch('/api/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', intent }),
+      });
+      const data = await res.json();
+      setSession(data.session);
+      setPhase('active');
+      setStartedAt(Date.now());
+      if (data.opening) setMessages([{ role: 'plex', content: data.opening }]);
+    } catch {}
     setLoading(false);
   }
 
-  async function sendMessage() {
-    if (!input.trim() || !session) return;
-    const userMsg: SessionMsg = { role: 'joe', content: input };
-    setMessages(prev => [...prev, userMsg]);
-    setInput(''); setLoading(true);
-    const res = await fetch('/api/one/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'message', sessionId: session.id, content: userMsg.content }),
-    });
-    const data = await res.json();
-    if (data.plexReply) setMessages(prev => [...prev, { role: 'plex', content: data.plexReply }]);
+  async function send() {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setLoading(true);
+    setMessages(m => [...m, { role: 'joe', content: text }]);
+    try {
+      const res = await fetch('/api/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'message', sessionId: session?.id, message: text, voice }),
+      });
+      const data = await res.json();
+      if (data.reply) setMessages(m => [...m, { role: 'plex', content: data.reply }]);
+    } catch {
+      setMessages(m => [...m, { role: 'plex', content: '(unavailable)' }]);
+    }
     setLoading(false);
   }
 
   async function closeSession() {
-    if (!session) return;
-    setPhaseWithNotify('closing', null);
+    setPhase('closing');
     setLoading(true);
-    const res = await fetch('/api/one/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'close', sessionId: session.id }),
-    });
-    const data = await res.json();
-    const proposed = data.proposedTags ?? {};
-    setProposedTags(proposed); setApprovedTags(proposed);
-    setPhaseWithNotify('review', null); setLoading(false);
-  }
-
-  async function commitTags() {
-    if (Object.keys(approvedTags).length > 0) {
-      setLoading(true);
-      await fetch('/api/one/session', {
+    try {
+      const res = await fetch('/api/session', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'commit_recall', tags: approvedTags }),
+        body: JSON.stringify({ action: 'close', sessionId: session?.id }),
       });
-      setLoading(false);
-    }
-    setCommitted(true);
+      const data = await res.json();
+      if (data.closing) setMessages(m => [...m, { role: 'plex', content: data.closing }]);
+    } catch {}
+    setPhase('review');
+    setLoading(false);
   }
 
-  function toggleTag(key: string) {
-    setApprovedTags(prev => {
-      const next = { ...prev };
-      if (next[key]) delete next[key]; else next[key] = proposedTags[key];
-      return next;
-    });
-  }
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%', fontFamily: 'var(--font-mono)', fontSize: '0.875rem',
-    background: 'oklch(from var(--bg) calc(l + 0.03) c h)',
-    border: '1px solid var(--border)', color: 'var(--text)',
-    padding: '0.75rem 1rem', resize: 'none' as const, outline: 'none',
-    lineHeight: 1.65, transition: 'border-color 140ms', borderRadius: '0.6rem',
-  };
+  const color = VOICE_COLORS[voice];
 
   if (phase === 'start') return (
-    <div style={{ maxWidth: 560 }}>
-      <div style={{ ...eyeStyle, marginBottom: '0.5rem' }}>Session</div>
-      <h2 style={{ color: 'var(--text)', fontSize: '1.6rem', fontWeight: 400, fontStyle: 'italic', marginBottom: '0.5rem', fontFamily: 'var(--font-serif, Georgia, serif)' }}>
-        What are we working on?
+    <div style={{ maxWidth: 560, margin: '0 auto', paddingTop: '3rem' }}>
+      <div style={eyeStyle}>New Session</div>
+      <h2 style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontSize: 'clamp(1.5rem,3vw,2.5rem)', fontWeight: 400, marginBottom: '1.5rem', color: 'var(--text)', lineHeight: 1.15 }}>
+        What brings you here?
       </h2>
-      <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.5rem' }}>
-        Plex will load matching recall context and stay scoped for this session.
-      </p>
       <textarea
-        rows={4}
-        placeholder="e.g. plex-sable session panel build, joesfaves proxy fix..."
+        placeholder="what do you want to work on or talk through..."
         value={intent}
         onChange={e => setIntent(e.target.value)}
-        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) startSession(); }}
-        style={inputStyle}
+        onKeyDown={e => e.key === 'Enter' && e.metaKey && startSession()}
+        rows={4}
+        style={{ width: '100%', ...mono, background: 'oklch(from var(--bg) calc(l + 0.02) c h)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.75rem 1rem', resize: 'none', outline: 'none', lineHeight: 1.6, marginBottom: '1rem', borderRadius: '0.5rem' }}
         onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
         onBlur={e => (e.target.style.borderColor = 'var(--border)')}
       />
-      <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ ...muted, opacity: 0.45, fontSize: '0.65rem' }}>⌘↵ to start</span>
-        <button
-          onClick={startSession} disabled={loading || !intent.trim()}
-          style={{
-            fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700,
-            padding: '0.55rem 1.25rem', background: 'var(--accent)', color: 'var(--bg)',
-            border: 'none', cursor: 'pointer', borderRadius: '0.6rem',
-            opacity: loading || !intent.trim() ? 0.4 : 1, transition: 'opacity 140ms',
-          }}
-        >
-          {loading ? 'Starting…' : 'Start Session →'}
-        </button>
-      </div>
+      <button onClick={startSession} disabled={loading || !intent.trim()}
+        style={{ ...mono, padding: '0.6rem 1.5rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: loading || !intent.trim() ? 0.4 : 1, borderRadius: '0.5rem' }}>
+        {loading ? 'starting...' : 'begin session →'}
+      </button>
     </div>
   );
 
-  if (phase === 'review' || phase === 'closing') return (
-    <div style={{ maxWidth: 560 }}>
-      {phase === 'closing' ? (
-        <p style={muted}>Plex is reviewing the session…</p>
-      ) : committed ? (
-        <div>
-          <div style={{ ...eyeStyle, color: 'var(--accent)' }}>Session closed</div>
-          <p style={{ ...muted, lineHeight: 1.6 }}>Recall tags {Object.keys(approvedTags).length > 0 ? 'committed to meta/recall.json.' : 'skipped.'}</p>
-          <button
-            onClick={() => { setPhaseWithNotify('start', null); setSession(null); setMessages([]); setCommitted(false); setIntent(''); }}
-            style={{ marginTop: '1.5rem', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '0.35rem 0.8rem', cursor: 'pointer', borderRadius: '0.5rem' }}>
-            ← new session
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 8rem)', maxWidth: 720, margin: '0 auto' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={{ ...muted, opacity: 0.5 }}>voice:</span>
+        {VOICES.map(v => (
+          <button key={v.key} onClick={() => setVoice(v.key)}
+            style={{
+              ...mono, padding: '0.25rem 0.6rem', borderRadius: '999px',
+              background: voice === v.key ? VOICE_COLORS[v.key] : 'transparent',
+              color: voice === v.key ? 'var(--bg)' : 'var(--muted)',
+              border: `1px solid ${voice === v.key ? VOICE_COLORS[v.key] : 'var(--border)'}`,
+              cursor: 'pointer', fontSize: '0.65rem',
+            }}>{v.label}</button>
+        ))}
+        {phase === 'active' && (
+          <button onClick={closeSession} style={{ ...mono, marginLeft: 'auto', padding: '0.25rem 0.7rem', fontSize: '0.65rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}>
+            end session
+          </button>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: '1rem' }}>
+        {messages.map((m, i) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'joe' ? 'flex-end' : 'flex-start', gap: '0.2rem' }}>
+            <span style={{ ...mono, fontSize: '0.55rem', color: 'var(--muted)', opacity: 0.5, letterSpacing: '0.08em' }}>
+              {m.role === 'joe' ? 'joe' : voice}
+            </span>
+            <div style={{
+              maxWidth: '80%', padding: '0.65rem 0.9rem', lineHeight: 1.7, fontSize: '0.9rem',
+              background: m.role === 'joe' ? 'oklch(from var(--bg) calc(l + 0.04) c h)' : 'oklch(from var(--bg) calc(l + 0.015) c h)',
+              borderLeft: m.role === 'plex' ? `2px solid ${color}` : 'none',
+              color: 'var(--text)', borderRadius: '0.5rem',
+            }}>{m.content}</div>
+          </div>
+        ))}
+        {loading && <div style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em' }}>…</div>}
+        <div ref={bottomRef} />
+      </div>
+
+      {phase === 'active' && (
+        <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+            placeholder="speak..."
+            disabled={loading}
+            style={{ flex: 1, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.5rem 0.8rem', outline: 'none', transition: 'border-color 120ms', borderRadius: '0.5rem' }}
+            onFocus={e => (e.target.style.borderColor = color)}
+            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+          />
+          <button onClick={send} disabled={loading || !input.trim()}
+            style={{ ...mono, padding: '0.5rem 0.9rem', background: input.trim() ? color : 'transparent', color: input.trim() ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: loading ? 0.4 : 1, transition: 'all 120ms', borderRadius: '0.5rem' }}>
+            ↑
           </button>
         </div>
-      ) : (
-        <div>
-          <div style={{ ...eyeStyle, marginBottom: '0.5rem' }}>Session · Close</div>
-          <h2 style={{ color: 'var(--text)', fontSize: '1.3rem', fontWeight: 400, marginBottom: '0.4rem' }}>Proposed recall tags</h2>
-          <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.25rem' }}>Toggle off any you don't want saved.</p>
-          {Object.keys(proposedTags).length === 0 ? (
-            <p style={{ ...muted, marginBottom: '1.25rem' }}>No new tags proposed.</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
-              {Object.entries(proposedTags).map(([key, value]) => (
-                <div key={key} onClick={() => toggleTag(key)}
-                  style={{
-                    cursor: 'pointer', borderRadius: '0.6rem',
-                    border: `1px solid ${approvedTags[key] ? 'var(--accent)' : 'var(--border)'}`,
-                    background: approvedTags[key] ? 'oklch(from var(--accent) l c h / 0.08)' : 'transparent',
-                    padding: '0.6rem 0.75rem', opacity: approvedTags[key] ? 1 : 0.5,
-                    transition: 'all 140ms',
-                  }}>
-                  <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.2rem' }}>{key}</p>
-                  <p style={{ ...muted, fontSize: '0.8rem' }}>{value}</p>
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <button onClick={() => setCommitted(true)} style={{ fontFamily: 'var(--font-mono)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: 0.5, fontSize: '0.8rem' }}>Skip</button>
-            <button onClick={commitTags} disabled={loading}
-              style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700, padding: '0.5rem 1.25rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', borderRadius: '0.6rem', opacity: loading ? 0.4 : 1 }}>
-              {loading ? 'Saving…' : `Save ${Object.keys(approvedTags).length} tag${Object.keys(approvedTags).length !== 1 ? 's' : ''}`}
-            </button>
-          </div>
+      )}
+
+      {phase === 'review' && (
+        <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <span style={{ ...muted, opacity: 0.6 }}>session closed.</span>
+          <button onClick={() => { setPhase('start'); setMessages([]); setSession(null); setIntent(''); setStartedAt(null); }}
+            style={{ ...mono, padding: '0.35rem 0.8rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', borderRadius: '0.5rem' }}>
+            new session
+          </button>
         </div>
       )}
     </div>
   );
+}
 
-  // Active session
+// ─── View: Spaces ────────────────────────────────────────────────────────────
+
+function SpacesView() {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 180px)', minHeight: 400 }}>
-      {/* Header */}
-      <div style={{
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)',
-        flexShrink: 0,
-      }}>
-        <div>
-          <div style={{ ...eyeStyle, marginBottom: '0.25rem' }}>Session · Active</div>
-          <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500 }}>{session?.intent}</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          {session && session.recallTagsLoaded.length > 0 && (
-            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-              {session.recallTagsLoaded.map(tag => (
-                <span key={tag} style={{
-                  fontSize: '0.7rem', background: 'oklch(from var(--accent) l c h / 0.12)',
-                  color: 'var(--accent)', padding: '0.2rem 0.6rem', borderRadius: '999px',
-                  fontFamily: 'var(--font-mono)',
-                }}>{tag}</span>
-              ))}
-            </div>
-          )}
-          <button onClick={closeSession} style={{
-            fontFamily: 'var(--font-mono)', fontSize: '0.75rem', padding: '0.4rem 0.8rem',
-            border: '1px solid var(--border)', background: 'transparent',
-            color: 'var(--muted)', cursor: 'pointer', borderRadius: '0.5rem',
-            transition: 'all 140ms',
-          }}
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--muted)'; (e.currentTarget as HTMLElement).style.color = 'var(--text)'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
-          >
-            Close Session
-          </button>
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingBottom: '0.5rem' }}>
-        {messages.map((msg, i) => (
-          <div key={i} style={{ display: 'flex', justifyContent: msg.role === 'joe' ? 'flex-end' : 'flex-start' }}>
-            <div style={{
-              maxWidth: '75%', borderRadius: '1.1rem',
-              padding: '0.75rem 1rem', fontSize: '0.9rem', lineHeight: 1.65,
-              background: msg.role === 'joe'
-                ? 'oklch(from var(--accent) l c h / 0.14)'
-                : 'oklch(from var(--bg) calc(l + 0.02) c h)',
-              border: msg.role === 'plex' ? '1px solid var(--border)' : 'none',
-              color: 'var(--text)',
-            }}>
-              {msg.role === 'plex' && (
-                <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.3rem' }}>plex</p>
-              )}
-              <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-            <div style={{
-              borderRadius: '1.1rem', padding: '0.75rem 1rem',
-              background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
-              border: '1px solid var(--border)',
-            }}>
-              <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.3rem' }}>plex</p>
-              <p style={{ ...muted, letterSpacing: '0.15em' }}>thinking…</p>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {/* Input */}
-      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: 'auto', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
-          <textarea
-            rows={2}
-            placeholder="Message Plex…"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            style={{ ...inputStyle, flex: 1 }}
-            onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
-            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
-          />
-          <button
-            onClick={sendMessage} disabled={loading || !input.trim()}
-            style={{
-              fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700,
-              padding: '0.65rem 1.1rem', background: 'var(--accent)', color: 'var(--bg)',
-              border: 'none', cursor: 'pointer', borderRadius: '0.6rem', flexShrink: 0,
-              opacity: loading || !input.trim() ? 0.4 : 1, transition: 'opacity 140ms',
-            }}
-          >
-            Send
-          </button>
-        </div>
-      </div>
+    <div style={{ maxWidth: 720, margin: '0 auto', paddingTop: '2rem' }}>
+      <div style={eyeStyle}>Spaces — scaffold</div>
+      <h2 style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontSize: 'clamp(1.5rem,3vw,2.5rem)', fontWeight: 400, color: 'var(--text)', marginBottom: '1rem', lineHeight: 1.15 }}>
+        Where things live.
+      </h2>
+      <p style={{ color: 'var(--muted)', lineHeight: 1.75, maxWidth: '52ch' }}>
+        Spaces is where persistent contexts will live — projects, conversations, shared memory zones, and collaboration surfaces. Coming soon.
+      </p>
     </div>
   );
 }
 
-// ─── View: SPACES ─────────────────────────────────────────────────────────────
+// ─── Root ────────────────────────────────────────────────────────────────────
 
-function SpacesView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void }) {
-  const plexVoice = VOICES.find(v => v.key === 'plex')!;
-  const threeVoices = VOICES.filter(v => v.key !== 'plex');
-
-  const spaceCards = [
-    { icon: '◐', name: 'Plex-Sable Dev', desc: 'The primary development space for Plex-Sable itself. Code, sessions, deploy logs, design decisions.' },
-    { icon: '∞', name: 'ONE Research', desc: 'Deep work and long thought. The space where Plex reasons through large questions over time.' },
-    { icon: '⌬', name: 'Manitec HQ', desc: 'Organizational memory, active projects, team context. The empire\'s shared space.' },
-  ];
-
-  return (
-    <>
-      {/* Voice Channels */}
-      <section style={{ marginBottom: '2.5rem' }}>
-        <div style={eyeStyle}>Voice Channels</div>
-        <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6, maxWidth: 520 }}>
-          Invoke each voice directly. Each one answers as itself. Per-channel history lives for this session.
-        </p>
-        <div style={{ marginBottom: '1rem' }}>
-          <VoicePanel voice={plexVoice} onVoiceUsed={onVoiceUsed} fullWidth />
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
-          {threeVoices.map(v => <VoicePanel key={v.key} voice={v} onVoiceUsed={onVoiceUsed} />)}
-        </div>
-      </section>
-
-      {/* Spaces scaffold */}
-      <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem' }}>
-        <div style={eyeStyle}>Spaces · early scaffolding</div>
-        <h2 style={{
-          fontFamily: 'var(--font-serif, Georgia, serif)',
-          fontSize: 'clamp(1.6rem,3vw,2.6rem)', fontWeight: 500,
-          marginBottom: '0.6rem', color: 'var(--text)',
-        }}>Persistent spaces.</h2>
-        <p style={{ ...muted, lineHeight: 1.75, maxWidth: '54ch', marginBottom: '2rem', fontSize: '0.95rem' }}>
-          Scoped environments where a project, a relationship, or a long-running thread can live with its own context, artefacts, and recall. Being built.
-        </p>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-          {spaceCards.map(s => (
-            <div key={s.name} style={{
-              padding: '1.25rem', borderRadius: '1.1rem',
-              border: '1px solid rgba(255,255,255,0.06)',
-              background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
-              cursor: 'default',
-            }}>
-              <div style={{ fontSize: '1.3rem', marginBottom: '0.6rem' }}>{s.icon}</div>
-              <h3 style={{ color: 'var(--text)', fontSize: '0.95rem', marginBottom: '0.4rem' }}>{s.name}</h3>
-              <p style={{ ...muted, fontSize: '0.85rem', lineHeight: 1.65 }}>{s.desc}</p>
-              <span style={{
-                display: 'inline-block', marginTop: '0.8rem', fontSize: '0.65rem',
-                textTransform: 'uppercase' as const, letterSpacing: '0.12em',
-                padding: '0.25rem 0.6rem', borderRadius: '999px',
-                background: 'oklch(from var(--accent) l c h / 0.1)',
-                color: 'var(--accent)',
-              }}>coming soon</span>
-            </div>
-          ))}
-          <div style={{
-            padding: '1.25rem', borderRadius: '1.1rem',
-            border: '1px dashed rgba(255,255,255,0.08)',
-            opacity: 0.45, cursor: 'default',
-          }}>
-            <div style={{ fontSize: '1.3rem', marginBottom: '0.6rem' }}>+</div>
-            <h3 style={{ color: 'var(--text)', fontSize: '0.95rem', marginBottom: '0.4rem' }}>New space</h3>
-            <p style={{ ...muted, fontSize: '0.85rem', lineHeight: 1.65 }}>Define intent, set context sources, invite artefacts.</p>
-          </div>
-        </div>
-        {/* Honest WIP banner */}
-        <div style={{
-          padding: '1rem 1.25rem', borderRadius: '0.9rem',
-          border: '1px solid rgba(240,160,96,0.14)',
-          background: 'rgba(240,160,96,0.04)',
-          display: 'flex', gap: '0.75rem', alignItems: 'flex-start',
-        }}>
-          <span style={{ fontSize: '1rem', marginTop: '1px', flexShrink: 0 }}>⚠</span>
-          <p style={{ ...muted, lineHeight: 1.7, fontSize: '0.9rem' }}>
-            <strong style={{ color: 'var(--text)', display: 'block', marginBottom: '0.25rem' }}>Spaces is incomplete.</strong>
-            The structure and vision are defined. Context scoping, artefact attachment, and multi-session persistence aren't built yet. This view exists so you can see where it's going without pretending it's there.
-          </p>
-        </div>
-      </section>
-    </>
-  );
-}
-
-// ─── Nav Items ────────────────────────────────────────────────────────────────
-
-const NAV_ITEMS: { id: View; symbol: string; label: string }[] = [
-  { id: 'one',     symbol: '◐', label: 'one'     },
-  { id: 'session', symbol: '⋯', label: 'session' },
-  { id: 'spaces',  symbol: '◫', label: 'spaces'  },
-];
-
-// ─── Root Shell ───────────────────────────────────────────────────────────────
-
-export default function OnePage() {
+export default function PlexSable() {
   const [view, setView] = useState<View>('one');
-  const [sessionPhase, setSessionPhase] = useState<SessionPhase>('start');
-  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
+  const [phase, setPhase] = useState<SessionPhase>('start');
+  const [startedAt, setStartedAt] = useState<number | null>(null);
   const [lastVoice, setLastVoice] = useState<VoiceChannel | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch('/api/one');
-        const d = await r.json();
-        const p = (d.requests ?? []).filter((r: any) => r.status === 'pending').length;
-        setPendingCount(p);
-      } catch {}
-    };
-    poll();
-    const id = setInterval(poll, 30000);
-    return () => clearInterval(id);
-  }, []);
+    fetch('/api/one').then(r => r.json()).then(d => {
+      setPendingCount((d.requests ?? []).filter((r: any) => r.status === 'pending').length);
+    }).catch(() => {});
+  }, [view]);
+
+  const navItems: { key: View; label: string }[] = [
+    { key: 'one', label: '◐ one' },
+    { key: 'session', label: '⋯ session' },
+    { key: 'spaces', label: '◫ spaces' },
+  ];
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '56px 1fr', minHeight: '100dvh', background: 'var(--bg)', color: 'var(--text)' }}>
+    <div style={{ minHeight: '100dvh', background: 'var(--bg)', color: 'var(--text)', display: 'flex', flexDirection: 'column' }}>
+      <SessionStrip phase={phase} startedAt={startedAt} lastVoice={lastVoice} pendingCount={pendingCount} />
 
-      {/* ── Sidebar ── */}
-      <aside style={{
-        display: 'flex', flexDirection: 'column', alignItems: 'center',
-        paddingBlock: '1.5rem', gap: '0.25rem',
-        borderRight: '1px solid var(--border)',
-        background: 'oklch(from var(--bg) calc(l - 0.015) c h)',
-        position: 'sticky', top: 0, height: '100dvh',
+      <nav style={{
+        display: 'flex', gap: '0.25rem', padding: '0.6rem 1.5rem',
+        borderBottom: '1px solid var(--border)',
+        background: 'oklch(from var(--bg) calc(l - 0.005) c h)',
       }}>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', letterSpacing: '0.18em', color: 'var(--accent)', opacity: 0.5, marginBottom: '1.25rem', textTransform: 'uppercase' }}>
-          ONE
-        </span>
+        {navItems.map(item => (
+          <button key={item.key} onClick={() => setView(item.key)}
+            style={{
+              ...mono, padding: '0.35rem 0.85rem', borderRadius: '999px',
+              background: view === item.key ? 'oklch(from var(--accent) l c h / 0.12)' : 'transparent',
+              color: view === item.key ? 'var(--accent)' : 'var(--muted)',
+              border: view === item.key ? '1px solid oklch(from var(--accent) l c h / 0.3)' : '1px solid transparent',
+              cursor: 'pointer', transition: 'all 140ms',
+            }}>
+            {item.label}
+            {item.key === 'one' && pendingCount > 0 && (
+              <span style={{ marginLeft: '0.4rem', background: 'var(--accent)', color: 'var(--bg)', borderRadius: 999, fontSize: '0.55rem', padding: '0.05rem 0.35rem', fontWeight: 700 }}>
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </nav>
 
-        {NAV_ITEMS.map(item => {
-          const active = view === item.id;
-          return (
-            <button key={item.id} onClick={() => setView(item.id)} style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.2rem',
-              padding: '0.5rem 0.25rem', width: '44px',
-              background: active ? 'oklch(from var(--accent) l c h / 0.1)' : 'transparent',
-              border: 'none', borderRadius: 6, cursor: 'pointer',
-              color: active ? 'var(--accent)' : 'var(--muted)',
-              transition: 'background 120ms, color 120ms',
-            }}
-              onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--bg) calc(l + 0.03) c h)'; }}
-              onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-            >
-              <span style={{ fontSize: '1rem', lineHeight: 1 }}>{item.symbol}</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.45rem', letterSpacing: '0.1em', textTransform: 'lowercase' }}>{item.label}</span>
-            </button>
-          );
-        })}
+      <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
+        {view === 'one'     && <OneView />}
+        {view === 'session' && <SessionView />}
+        {view === 'spaces'  && <SpacesView />}
+      </main>
 
-        <div style={{ width: '24px', height: '1px', background: 'var(--border)', margin: '0.5rem 0' }} />
-
-        <div style={{ flex: 1 }} />
-
-        <a
-          href="/"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.12em', textDecoration: 'none', color: 'var(--muted)', opacity: 0.45, padding: '0.4rem 0.25rem', borderRadius: 6, transition: 'opacity 120ms', writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-          onMouseEnter={e => (e.currentTarget.style.opacity = '0.9')}
-          onMouseLeave={e => (e.currentTarget.style.opacity = '0.45')}
-        >
-          ← plex
-        </a>
-      </aside>
-
-      {/* ── Main ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', overflow: 'hidden' }}>
-        <SessionStrip
-          phase={sessionPhase}
-          startedAt={sessionStartedAt}
-          lastVoice={lastVoice}
-          pendingCount={pendingCount}
-        />
-
-        <main style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: 'clamp(1.5rem,4vw,2.5rem) clamp(1rem,3vw,2rem)',
-        }}>
-          {view === 'one' && <OneView />}
-          {view === 'session' && (
-            <SessionView onPhaseChange={(p, startedAt) => {
-              setSessionPhase(p);
-              setSessionStartedAt(startedAt);
-            }} />
-          )}
-          {view === 'spaces' && <SpacesView onVoiceUsed={v => setLastVoice(v)} />}
-        </main>
-
-        <Footer />
-      </div>
+      <Footer />
     </div>
   );
 }
