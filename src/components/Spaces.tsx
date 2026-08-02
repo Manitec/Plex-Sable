@@ -1,3 +1,4 @@
+'use client';
 import Link from 'next/link';
 
 const spaces = [
@@ -89,14 +90,19 @@ export default function Spaces() {
             </div>
             <div style={{ display: 'flex', gap: '1px', background: 'var(--border)', width: 'fit-content' }}>
               {voices.map(v => (
-                <Link key={v.name} href={v.href} style={{
-                  display: 'flex', alignItems: 'center', gap: '0.65rem',
-                  padding: '0.65rem 1.25rem',
-                  background: 'var(--bg)',
-                  textDecoration: 'none',
-                  transition: 'background 0.2s',
-                }} onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface)')}
-                   onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg)')}>
+                <Link
+                  key={v.name}
+                  href={v.href}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: '0.65rem',
+                    padding: '0.65rem 1.25rem',
+                    background: 'var(--bg)',
+                    textDecoration: 'none',
+                    transition: 'background 0.2s',
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'var(--surface)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg)')}
+                >
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1rem', color: 'var(--accent)', opacity: 0.55 }}>{v.glyph}</span>
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--muted)', opacity: 0.7 }}>{v.name}</span>
                 </Link>
