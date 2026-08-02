@@ -25,7 +25,7 @@ const spaces = [
     glyph: '⬢',
     name: 'manitec-hq',
     sub: 'empire · shared',
-    desc: 'Organizational memory, active projects, team context. The empire’s shared space.',
+    desc: 'Organizational memory, active projects, team context. The empire\'s shared space.',
     status: 'coming soon',
     href: null,
   },
@@ -57,7 +57,14 @@ export default function Spaces() {
         {/* Space cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px,100%), 1fr))', gap: '1px', background: 'var(--border)', marginBottom: '1px' }}>
           {spaces.map(s => (
-            <div key={s.id} style={{ background: 'var(--bg)', padding: '1.75rem', position: 'relative' }}>
+            <div key={s.id} style={{
+              background: 'var(--bg)',
+              padding: '1.75rem',
+              position: 'relative',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: '220px',
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.4rem', color: 'var(--accent)', opacity: 0.6 }}>{s.glyph}</span>
                 <span style={{
@@ -71,13 +78,22 @@ export default function Spaces() {
               <div style={{ fontFamily: 'var(--font-garamond)', fontSize: 'clamp(1.05rem,2vw,1.25rem)', fontStyle: 'italic', color: 'var(--text)', marginBottom: '0.35rem' }}>{s.name}</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--accent)', opacity: 0.45, letterSpacing: '0.06em', marginBottom: '0.9rem' }}>{s.sub}</div>
               <p style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.6, margin: 0, opacity: 0.8 }}>{s.desc}</p>
-              {s.href && (
+              {s.href ? (
                 <Link href={s.href} style={{
                   display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                  marginTop: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
+                  marginTop: 'auto', paddingTop: '1.25rem',
+                  fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
                   textTransform: 'uppercase' as const, letterSpacing: '0.1em',
-                  color: 'var(--accent)', textDecoration: 'none', opacity: 0.7,
+                  color: 'var(--accent)', textDecoration: 'none', opacity: 0.85,
+                  alignSelf: 'flex-start',
                 }}>enter ↗</Link>
+              ) : (
+                <span style={{
+                  display: 'inline-flex', marginTop: 'auto', paddingTop: '1.25rem',
+                  fontFamily: 'var(--font-mono)', fontSize: '0.65rem',
+                  textTransform: 'uppercase' as const, letterSpacing: '0.1em',
+                  color: 'var(--muted)', opacity: 0.25,
+                }}>not yet open</span>
               )}
             </div>
           ))}
