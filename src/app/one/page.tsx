@@ -482,6 +482,9 @@ function OneView() {
   const [newFileContent, setNewFileContent] = useState('');
   const [newFileOpen, setNewFileOpen] = useState(false);
   const [repoMsg, setRepoMsg] = useState('');
+  const [log, setLog] = useState<any[]>([]);
+  const [logLoading, setLogLoading] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
 
   const refresh = useCallback(async () => {
     const r = await fetch('/api/one');
@@ -501,6 +504,16 @@ function OneView() {
       const res = await fetch('/api/one?section=sleep');
       const data = await res.json();
       if (data.sleep?.pending) setSleep(data.sleep);
+    } catch {}
+  }
+
+  async function dismissSleep() {
+    setSleepDismissed(true);
+    try {
+      await fetch('/api/one', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'clear_sleep' }),
+      });
     } catch {}
   }
 
@@ -528,6 +541,16 @@ function OneView() {
       const data = await res.json();
       setProjects(data.projects ?? []);
     } catch {}
+  }
+
+  async function fetchLog() {
+    setLogLoading(true);
+    try {
+      const res = await fetch('/api/one?section=log');
+      const data = await res.json();
+      setLog(data.log ?? []);
+    } catch {}
+    setLogLoading(false);
   }
 
   async function addProject() {
@@ -701,7 +724,7 @@ function OneView() {
         <section style={{ ...sectionStyle, borderTopColor: 'var(--accent)', marginBottom: '3rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
             <h2 style={{ ...labelStyle, marginBottom: 0 }}>Overnight — {sleep!.date}{sleep!.mode && sleep!.mode !== 'dreamless' ? ` · ${sleep!.mode}` : ''}</h2>
-            <button onClick={() => setSleepDismissed(true)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
+            <button onClick={dismissSleep} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
           </div>
           <div style={{ display: 'grid', gap: '1.25rem' }}>
             {sleep!.nyx_excerpt && <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>nyx</p><p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep!.nyx_excerpt}</p></div>}
@@ -926,6 +949,48 @@ function OneView() {
           <button onClick={leaveMessage} disabled={!messageToLeave.trim()} style={{ ...btnAccent, opacity: messageToLeave.trim() ? 1 : 0.4 }}>leave message</button>
           {messageStatus && <p style={{ ...muted, color: 'var(--accent)' }}>{messageStatus}</p>}
         </div>
+      </section>
+
+      {/* Activity Log */}
+      <section style={sectionStyle}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <h2 style={{ ...labelStyle, marginBottom: 0 }}>Activity Log</h2>
+          <button
+            onClick={() => {
+              const next = !logOpen;
+              setLogOpen(next);
+              if (next && log.length === 0) fetchLog();
+            }}
+            style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
+          >
+            {logOpen ? 'hide' : 'show'}
+          </button>
+        </div>
+        {logOpen && (
+          logLoading
+            ? <p style={muted}>loading...</p>
+            : log.length === 0
+              ? <p style={muted}>no log entries yet.</p>
+              : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {log.map((entry: any) => (
+                    <div key={entry.id} style={{
+                      padding: '0.6rem 0.8rem',
+                      borderLeft: '2px solid var(--border)',
+                      background: 'oklch(from var(--bg) calc(l + 0.01) c h)',
+                    }}>
+                      <p style={{ color: 'var(--text)', fontSize: '0.825rem', lineHeight: 1.6, marginBottom: '0.2rem' }}>
+                        {entry.entry ?? '(no entry)'}
+                      </p>
+                      <p style={{ ...muted, fontSize: '0.6rem', opacity: 0.55 }}>
+                        <span style={{ color: 'var(--accent)' }}>{entry.author ?? 'unknown'}</span>
+                        {entry.timestamp ? ` · ${fmtTime(entry.timestamp)}` : ''}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )
+        )}
       </section>
 
       {activeRequest && (

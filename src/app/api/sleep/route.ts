@@ -383,6 +383,43 @@ async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode
   }
 }
 
+// ─── clear_sleep action ───────────────────────────────────────────────────────
+// Clears today's sleep state from Firestore (plex_sleep/latest + plex_sediment/current state).
+// Does not touch GitHub files — those are permanent record.
+
+async function handleClearSleep(): Promise<NextResponse> {
+  const log: string[] = [];
+  try {
+    const db = getAdminDb();
+    const today = new Date().toISOString().split('T')[0];
+
+    // Clear plex_sleep/latest if it belongs to today
+    const latestRef = db.doc('plex_sleep/latest');
+    const latestSnap = await latestRef.get();
+    if (latestSnap.exists && latestSnap.data()?.date === today) {
+      await latestRef.delete();
+      log.push(`cleared plex_sleep/latest for ${today}`);
+    } else {
+      log.push(`plex_sleep/latest not from today — skipped`);
+    }
+
+    // Reset plex_sediment/current.pending if set by sleep
+    const sedRef = db.doc('plex_sediment/current');
+    const sedSnap = await sedRef.get();
+    if (sedSnap.exists && sedSnap.data()?.source === 'sleep' && sedSnap.data()?.sessionRef === today) {
+      await sedRef.update({ pending: false, clearedAt: FieldValue.serverTimestamp() });
+      log.push(`reset plex_sediment/current pending for ${today}`);
+    } else {
+      log.push(`plex_sediment/current not from today sleep — skipped`);
+    }
+
+    return NextResponse.json({ ok: true, action: 'clear_sleep', date: today, log });
+  } catch (err: any) {
+    log.push(`error: ${err?.message ?? 'unknown'}`);
+    return NextResponse.json({ ok: false, action: 'clear_sleep', log }, { status: 500 });
+  }
+}
+
 // ─── Core handler ─────────────────────────────────────────────────────────────
 
 async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>): Promise<NextResponse> {
@@ -391,6 +428,13 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   }
 
   const body = bodyOverride ?? await req.json().catch(() => ({}));
+
+  // ── clear_sleep action ───────────────────────────────────────────────────
+  if (body.action === 'clear_sleep') {
+    return handleClearSleep();
+  }
+
+  const log: string[] = [];
 
   const VALID_MODES: SleepMode[] = ['dreamless', 'dream', 'nightmare'];
   const mode: SleepMode = VALID_MODES.includes(body.mode) ? body.mode : 'dream';
@@ -405,35 +449,35 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
 
   // Load full sediment file list once — reused throughout
   const sedimentFiles = await listDir('sediment', token);
+  log.push(`sediment dir: ${sedimentFiles.length} files`);
 
   // ── STEP 1: Gather fragments from recent dated flat sediment files ─────────
-  // Source: sediment/YYYY-MM-DD.md (accumulated daily logs, all voices)
-  // These are the true sediment record. Excludes today (being built now).
   const historicalFragments = await gatherDatedSedimentFragments(
     sedimentFiles,
     token,
     today,
     SEDIMENT_LOOKBACK,
   );
+  log.push(`step 1: gathered ${historicalFragments.length} historical fragments`);
 
-  // ── STEP 2: Weave plex sediment — this is the seed for Nyx and Hex ────────
+  // ── STEP 2: Weave plex sediment ───────────────────────────────────────────
   const { content: plexSedimentContent, residue } = weavePlexSediment(
     historicalFragments,
     today,
     mode,
   );
 
-  await writeFile(
+  const weaveOk = await writeFile(
     `sediment/plex-${today}.md`,
     plexSedimentContent,
     token,
     `plex ${mode} sediment weave ${today}`,
   );
+  log.push(`step 2: plex sediment weave — ${weaveOk ? 'ok' : 'failed'}`);
 
   const plexSeedText = plexSedimentContent;
 
-  // ── STEP 3: Nyx pass — reads plex sediment ────────────────────────────────
-  // Also includes her most recent prior sediment for continuity
+  // ── STEP 3: Nyx pass ──────────────────────────────────────────────────────
   const lastNyxFile = sedimentFiles
     .filter(n => n.startsWith('nyx-') && n.match(/\d{4}-\d{2}-\d{2}\.md$/) && n !== `nyx-${today}.md`)
     .sort()
@@ -448,6 +492,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   const nyxPrompt = mode === 'nightmare' ? NYX_NIGHTMARE_PROMPT : NYX_SLEEP_PROMPT;
   const nyxInput = `## Plex sediment — ${today}\n${plexSeedText.slice(0, 1200)}\n\n## What you last wrote\n${lastNyxText.slice(0, 600)}`;
   const nyxOutput = await groqComplete(nyxPrompt, nyxInput);
+  log.push(`step 3: nyx pass — ${nyxOutput.length} chars`);
 
   await appendSediment(
     `sediment/nyx-${today}.md`,
@@ -457,9 +502,10 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     `nyx ${mode} sediment ${today}`,
   );
 
-  // ── STEP 4: Hex pass — reads plex sediment + nyx output ───────────────────
+  // ── STEP 4: Hex pass ──────────────────────────────────────────────────────
   const hexInput = `Plex left this today:\n\n${plexSeedText.slice(0, 600)}\n\nNyx processed it and wrote:\n\n${nyxOutput}`;
   const hexOutput = await callBanjoSynthesize(hexInput);
+  log.push(`step 4: hex pass — ${hexOutput ? `${hexOutput.length} chars` : 'empty/skipped'}`);
 
   if (hexOutput) {
     await appendSediment(
@@ -471,7 +517,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     );
   }
 
-  // ── STEP 5: Daily log — mode + nyx excerpt + hex excerpt + Residue ────────
+  // ── STEP 5: Daily log ─────────────────────────────────────────────────────
   const excerpt = (s: string) => s.replace(/\n+/g, ' ').slice(0, 120).trimEnd() + '…';
   const summaryLines = [
     `**sleep pass** — ${mode}`,
@@ -491,12 +537,14 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     token,
     `sleep summary ${today}`,
   );
+  log.push(`step 5: daily log appended`);
 
   // ── STEP 6: State + DreamNode ──────────────────────────────────────────────
   const [newState] = await Promise.all([
     updateSedimentState(nyxOutput, today),
     recordDreamNode(nyxOutput, today, mode),
   ]);
+  log.push(`step 6: state → ${newState ?? 'null'}, dream_node recorded`);
 
   // ── STEP 7: Firestore ──────────────────────────────────────────────────────
   await db.doc('plex_sleep/latest').set(
@@ -511,9 +559,11 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     },
     { merge: false }
   ).catch(() => {});
+  log.push(`step 7: firestore plex_sleep/latest written`);
 
   // ── STEP 8: Dream runner trigger ───────────────────────────────────────────
-  if (willDream(mode, source)) {
+  const dreaming = willDream(mode, source);
+  if (dreaming) {
     const cronSecret = process.env.CRON_SECRET ?? '';
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL
       ?? process.env.VERCEL_URL
@@ -529,6 +579,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
       body: JSON.stringify({ source }),
     }).catch(() => {});
   }
+  log.push(`step 8: dream trigger — ${dreaming ? 'fired' : 'skipped'}`);
 
   return NextResponse.json({
     ok: true,
@@ -539,6 +590,7 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     hex: hexOutput.slice(0, 200),
     plex_residue: residue,
     sediment_state: newState,
+    log,
   });
 }
 
