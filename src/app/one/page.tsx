@@ -937,42 +937,7 @@ function OneView() {
               </div>
             </section>
           )}
-
-          {/* Voices */}
-          <section style={panelStyle}>
-            <div style={eyeStyle}>Voices</div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.875rem' }}>
-              {VOICES.map(v => {
-                const color = VOICE_COLORS[v.key];
-                return (
-                  <article key={v.key} style={{
-                    padding: '1rem', borderRadius: '1.1rem',
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid rgba(255,255,255,0.05)',
-                    display: 'flex', flexDirection: 'column', gap: '0.6rem',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color }}>
-                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, boxShadow: `0 0 10px ${color}66`, flexShrink: 0 }} />
-                        {v.label}
-                      </div>
-                      <span style={{ ...muted, fontSize: '0.65rem', opacity: 0.5 }}>{VOICE_SHORTCUTS[v.key]}</span>
-                    </div>
-                    <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6 }}>{v.desc}</p>
-                    <div style={{
-                      borderRadius: '0.6rem', padding: '0.6rem 0.75rem',
-                      fontSize: '0.83rem', lineHeight: 1.6,
-                      background: 'rgba(255,255,255,0.03)',
-                      color: 'var(--muted)', marginTop: 'auto',
-                      borderLeft: `2px solid ${color}`,
-                      paddingLeft: '0.65rem', fontStyle: 'italic',
-                    }}>{v.bubble}</div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-
+    
           {/* Repo Manager */}
           <section style={panelStyle}>
             <div style={eyeStyle}>Repo Manager — Manitec/plex</div>
@@ -1227,22 +1192,7 @@ function OneView() {
             )}
           </section>
 
-          {/* Speak — ONE view */}
-          <section style={panelStyle}>
-            <div style={eyeStyle}>Speak</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-              {VOICES.map(v => (
-                <VoicePanel
-                  key={v.key}
-                  voice={v}
-                  onVoiceUsed={() => {}}
-                  fullWidth
-                />
-              ))}
-            </div>
-          </section>
-
-        </div>
+       </div>
       </div>
 
       {activeRequest && (
