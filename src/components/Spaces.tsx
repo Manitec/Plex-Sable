@@ -77,24 +77,23 @@ export default function Spaces() {
               </div>
               <div style={{ fontFamily: 'var(--font-garamond)', fontSize: 'clamp(1.05rem,2vw,1.25rem)', fontStyle: 'italic', color: 'var(--text)', marginBottom: '0.35rem' }}>{s.name}</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--accent)', opacity: 0.45, letterSpacing: '0.06em', marginBottom: '0.9rem' }}>{s.sub}</div>
-              <p style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.6, margin: 0, opacity: 0.8 }}>{s.desc}</p>
-              {s.href ? (
-                <Link href={s.href} style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                  marginTop: 'auto', paddingTop: '1.25rem',
-                  fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
-                  textTransform: 'uppercase' as const, letterSpacing: '0.1em',
-                  color: 'var(--accent)', textDecoration: 'none', opacity: 0.85,
-                  alignSelf: 'flex-start',
-                }}>enter ↗</Link>
-              ) : (
-                <span style={{
-                  display: 'inline-flex', marginTop: 'auto', paddingTop: '1.25rem',
-                  fontFamily: 'var(--font-mono)', fontSize: '0.65rem',
-                  textTransform: 'uppercase' as const, letterSpacing: '0.1em',
-                  color: 'var(--muted)', opacity: 0.25,
-                }}>not yet open</span>
-              )}
+              <p style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.6, margin: '0 0 auto', opacity: 0.8 }}>{s.desc}</p>
+              <div style={{ paddingTop: '1.25rem' }}>
+                {s.href ? (
+                  <Link href={s.href} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                    fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
+                    textTransform: 'uppercase' as const, letterSpacing: '0.1em',
+                    color: 'var(--accent)', textDecoration: 'none', opacity: 0.85,
+                  }}>enter ↗</Link>
+                ) : (
+                  <span style={{
+                    fontFamily: 'var(--font-mono)', fontSize: '0.65rem',
+                    textTransform: 'uppercase' as const, letterSpacing: '0.1em',
+                    color: 'var(--muted)', opacity: 0.25,
+                  }}>not yet open</span>
+                )}
+              </div>
             </div>
           ))}
 
