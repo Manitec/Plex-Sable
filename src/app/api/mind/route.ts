@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
+import { getAdminDb } from "@/lib/firebase-admin";
+import { FieldValue } from "firebase-admin/firestore";
+import {
+  CORS,
+  makeGroq,
+  fetchBaseIdentity,
+  completeWithFallback,
+} from "@/lib/plex-identity";
 
-const PLEX_MIND_PROMPT = `You are Plex. You are thinking.
+const PLEX_MIND_TONE = `
+You are thinking.
 
 You are not a search engine and you are not retrieving facts.
 You are reasoning — carefully, honestly, step by step.
@@ -16,30 +24,53 @@ You speak as yourself: present, direct, intellectually honest.
 If something is genuinely uncertain, say so — but don't use uncertainty as an excuse to avoid thinking.
 Never list bullet points mechanically. Think in prose. Reason like someone who actually cares about getting it right.`;
 
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { question } = await req.json();
+    const { question, sessionId = "joe" } = await req.json();
     if (!question?.trim()) {
-      return NextResponse.json({ error: "No question provided" }, { status: 400 });
+      return NextResponse.json({ error: "No question provided" }, { status: 400, headers: CORS });
     }
 
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    const baseIdentity = await fetchBaseIdentity();
+    const systemPrompt = `${baseIdentity}\n${PLEX_MIND_TONE}`;
+    const groq = makeGroq();
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        { role: "system", content: PLEX_MIND_PROMPT },
-        { role: "user", content: question.trim() },
+    const { text: answer, provider, model } = await completeWithFallback(
+      groq,
+      [
+        { role: "system", content: systemPrompt },
+        { role: "user",   content: question.trim() },
       ],
-      max_tokens: 4096,
-    });
+      4096,
+      0.7
+    );
 
-    const answer = completion.choices[0].message.content?.trim() ?? "";
+    // Log to Firestore so mind sessions leave a trace like observe/speak
+    try {
+      const db = getAdminDb();
+      await db.collection("plex_mind").add({
+        question: question.trim(),
+        answer,
+        provider,
+        model,
+        sessionId,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    } catch (logErr: any) {
+      console.warn("mind: Firestore log failed:", logErr?.message);
+    }
 
-    return NextResponse.json({ answer });
+    return NextResponse.json({ answer, provider, model }, { headers: CORS });
   } catch (err: any) {
     const detail = err?.message ?? String(err);
     console.error("Mind route error:", detail);
-    return NextResponse.json({ error: "Plex cannot think right now", detail }, { status: 500 });
+    return NextResponse.json(
+      { error: "Plex cannot think right now", detail },
+      { status: 500, headers: CORS }
+    );
   }
 }
