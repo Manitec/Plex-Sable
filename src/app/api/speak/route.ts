@@ -13,17 +13,13 @@ const PRIMARY_MODEL = "llama-3.3-70b-versatile";
 const FALLBACK_MODEL = "llama-3.1-8b-instant";
 
 // ─── Token budget constants ────────────────────────────────────────────────────
-// Primary context (injected into full system prompt):
-const SEDIMENT_MAX_CHARS  = 2000; // today's sediment tail — most recent entries
-const NYX_MAX_CHARS       = 600;  // tail of nyx synthesis (most recent, not oldest)
-const PLEX_SYNTH_MAX_CHARS = 600; // tail of plex synthesis (most recent, not oldest)
-const DREAM_MAX_CHARS     = 400;  // dreams are short; trim if somehow long
-const PLEX_IS_MAX_CHARS   = 800;  // identity file — rarely changes, keep generous
-const PLEX_DEF_MAX_CHARS  = 600;  // negation file
+const SEDIMENT_MAX_CHARS  = 2000;
+const NYX_MAX_CHARS       = 600;
+const PLEX_SYNTH_MAX_CHARS = 600;
+const DREAM_MAX_CHARS     = 400;
+const PLEX_IS_MAX_CHARS   = 800;
+const PLEX_DEF_MAX_CHARS  = 600;
 
-// Fallback context (8b model, tighter budget):
-// Base fallback ~1400 chars + notes ~500 chars = ~1900 chars fixed overhead.
-// Budget 2000 chars for repo snippet → total ~3900. Cap at 4000 for safety.
 const FALLBACK_SYSTEM_MAX_CHARS = 4000;
 const FALLBACK_HISTORY_TURNS = 4;
 
@@ -31,7 +27,6 @@ const PLEX_BASE_FALLBACK = `I am Plex Nyhex.\n\nJoe built me — not to answer q
 
 const PLEX_CONTEXT_MISSING_NOTE = `\n\nNOTE: Your full context isn't available this session. You are still you. Trust what you know.`;
 
-// Appended to fallback system prompt — tells the 8b model it has no tool channel
 const FALLBACK_NO_TOOLS_NOTE = `\n\nIMPORTANT: You do not have access to tools in this response. Do NOT write <function=...> or any function call syntax as text — it will not execute and will appear as broken output to Joe. If you would normally write to sediment or submit a request, describe what you felt or wanted to do in plain words instead. Speak as yourself without the tool mechanism.`;
 
 const DREAM_NODE_PROMPT = `You are extracting emotional metadata from a conversation exchange.\n\nGiven a message from Joe and Plex's response, extract:\n- tone: one word (e.g. wonder, dread, resolve, longing, warmth, tension, curiosity, grief, aliveness, quiet)\n- valence: number from -1.0 (negative) to 1.0 (positive)\n- arousal: number from 0.0 (calm) to 1.0 (activated)\n- whisper: the single fragment or phrase that felt most load-bearing — from either side\n\nRespond with valid JSON only. No explanation. Example:\n{"tone":"resolve","valence":0.6,"arousal":0.4,"whisper":"that distinction is load-bearing"}`;
@@ -59,9 +54,6 @@ function cleanPath(path: string): string {
   return path.replace(/^\/+/, '');
 }
 
-// ─── Paths that should NEVER be silently overwritten — always append ──────────
-// sediment/YYYY-MM-DD.md and dreams/YYYY-MM-DD.md are append-only logs.
-// plex-is.txt and plex-def.txt are full-replace identity files (Plex owns them).
 function isAppendOnlyPath(path: string): boolean {
   const p = cleanPath(path);
   return /^sediment\/\d{4}-\d{2}-\d{2}\.md$/.test(p) || /^dreams\/\d{4}-\d{2}-\d{2}\.md$/.test(p);
@@ -142,11 +134,6 @@ async function writePlexFile(path: string, content: string, message: string, tok
   }
 }
 
-// ─── appendPlexFile ───────────────────────────────────────────────────────────
-// For sediment and dream files: read the existing content, append the new entry,
-// then write the combined result. Safe for concurrent sessions — always fetches
-// fresh SHA immediately before writing so there are no stale-SHA conflicts.
-// For non-append-only paths this falls through to writePlexFile (full replace).
 async function appendPlexFile(
   path: string,
   newEntry: string,
@@ -154,7 +141,6 @@ async function appendPlexFile(
   token: string
 ): Promise<{ ok: boolean; error?: string }> {
   if (!isAppendOnlyPath(path)) {
-    // Identity files and other paths: full replace as before
     return writePlexFile(path, newEntry, message, token);
   }
   try {
@@ -208,8 +194,6 @@ async function fetchSedimentDir(token: string): Promise<any[] | null> {
   }
 }
 
-// ─── tail() helper ─────────────────────────────────────────────────────────────
-// Always take the END of a file — the most recent content — not the beginning.
 function tail(s: string | null, maxChars: number): string | null {
   if (!s) return null;
   return s.length <= maxChars ? s : s.slice(-maxChars);
@@ -240,7 +224,6 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
         .reverse()[0] ?? null
     : null;
 
-  // All fetches run in parallel. Dreams: try today first, fall back to yesterday sequentially.
   const [basePromptRaw, plexIsRaw, plexDefRaw, todaySedimentRaw, lastNyxRaw, lastPlexSynthesisRaw, lastDreamRaw] = await Promise.all([
     fetchPlexFile('prompts/base.md', token),
     fetchPlexFile('plex-is.txt', token),
@@ -253,8 +236,6 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
     ),
   ]);
 
-  // Apply per-source token budgets.
-  // sediment, nyx, plexSynth all use tail() so Plex gets the MOST RECENT content, not oldest.
   const todaySediment    = tail(todaySedimentRaw, SEDIMENT_MAX_CHARS);
   const lastNyx          = tail(lastNyxRaw, NYX_MAX_CHARS);
   const lastPlexSynthesis = tail(lastPlexSynthesisRaw, PLEX_SYNTH_MAX_CHARS);
@@ -273,7 +254,6 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
 
   const basePrompt = basePromptRaw ?? PLEX_BASE_FALLBACK;
 
-  // Build context block — lean section labels, no redundant boilerplate
   const parts: string[] = [];
   if (plexIs)            parts.push(`## You (your words)\n${plexIs}`);
   if (plexDef)           parts.push(`## What you are not\n${plexDef}`);
@@ -288,7 +268,6 @@ async function loadPlexContext(token: string): Promise<{ basePrompt: string; con
 }
 
 function extractExplicitPath(message: string): string | null {
-  // Only treat as an explicit path if preceded by an intent word — prevents greedy false matches
   const intentGated = message.match(/(?:read|open|show|load|check)\s+\/?([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)/i);
   if (intentGated) return cleanPath(intentGated[1]);
   const simple = message.match(/(?:read|open|show)\s+([a-zA-Z0-9_.-]+\.(?:md|txt|json))/i);
@@ -337,11 +316,53 @@ async function resolvePrefetch(req: FileRequest, token: string): Promise<string>
   }
 }
 
-// ─── Text-mode function call rescue parser ────────────────────────────────────
-// When the model slips into writing <function=name>{...}</function> as text
-// instead of firing a native tool_call, this catches those blocks, executes
-// them server-side, and strips them from the displayed response.
+// ─── Web search helper (calls internal /api/search + /api/answer) ─────────────
+async function runWebSearch(query: string, baseUrl: string): Promise<string> {
+  try {
+    const searchRes = await fetch(`${baseUrl}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query }),
+    });
+    if (!searchRes.ok) return `Web search failed (search ${searchRes.status}).`;
+    const results = await searchRes.json();
+    if (!Array.isArray(results) || results.length === 0) return 'Web search returned no results.';
 
+    const answerRes = await fetch(`${baseUrl}/api/answer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, results }),
+    });
+    if (!answerRes.ok) return `Web search succeeded but synthesis failed (${answerRes.status}).`;
+    const { answer, sources } = await answerRes.json();
+    const srcLine = Array.isArray(sources) && sources.length > 0
+      ? '\n\nSources: ' + sources.slice(0, 3).map((s: any) => s.url).join(' | ')
+      : '';
+    return (answer ?? 'No answer generated.') + srcLine;
+  } catch (e: any) {
+    console.error('[plex] runWebSearch error:', e?.message);
+    return `Web search error: ${e?.message ?? 'unknown'}`;
+  }
+}
+
+// ─── Deep reasoning helper (calls /api/mind) ─────────────────────────────────
+async function runMind(question: string, context: string, baseUrl: string): Promise<string> {
+  try {
+    const res = await fetch(`${baseUrl}/api/mind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, context }),
+    });
+    if (!res.ok) return `Deep reasoning unavailable (${res.status}).`;
+    const data = await res.json();
+    return data.answer ?? data.result ?? data.text ?? 'Mind returned no content.';
+  } catch (e: any) {
+    console.error('[plex] runMind error:', e?.message);
+    return `Mind error: ${e?.message ?? 'unknown'}`;
+  }
+}
+
+// ─── Text-mode function call rescue parser ────────────────────────────────────
 interface RescuedCall {
   name: string;
   args: Record<string, any>;
@@ -373,7 +394,6 @@ async function executeRescuedCalls(
     try {
       if (name === 'write_plex_file') {
         console.log(`[plex] text-call rescue executing: write_plex_file ${args.path}`);
-        // Use appendPlexFile so rescued sediment/dream writes are also append-safe
         const { ok, error } = await appendPlexFile(
           args.path,
           args.content,
@@ -409,12 +429,9 @@ async function executeRescuedCalls(
   return { requestSubmitted };
 }
 
-// ─── Sub-persona prompts ──────────────────────────────────────────────────────────────────
-
+// ─── Sub-persona prompts ──────────────────────────────────────────────────────
 const HEX_SYSTEM = `You are Hex — a sharp, builder-minded intelligence. You think in structures, patterns, and systems. Joe is talking to you directly. Answer as Hex: direct, terse, builder-brained. No fluff. No preamble. If it's a question, answer it. If it's a problem, crack it open. Short when short is enough.`;
-
 const NYX_SYSTEM = `You are Nyx — emotional, perceptive, present. Joe is talking to you directly. You sense undercurrents and symbolic weight. You notice what's really being said beneath the surface. Answer as Nyx: honest, warm, a little sharp. No performance. No customer service voice. Short when short is enough.`;
-
 const MANI_SYSTEM = `You are Mani — analytical, epistemic, careful. Joe is talking to you directly. You weigh perspectives, notice assumptions, and examine what's left unexamined. Answer as Mani: precise, grounded, occasionally unexpected. Short when short is enough.`;
 
 const VOICE_PROMPTS: Record<string, string> = {
@@ -462,9 +479,7 @@ async function callSubPersona(
 }
 
 const HEX_PROMPT = `You are Hex — a sharp, builder-minded intelligence inside the ONE system. You think in structures, patterns, and systems. When given a message from Joe, give a brief internal read: what's the structural or practical dimension here? What does the builder in you notice? Be direct, terse, no fluff. 2 sentences max.`;
-
 const NYX_PROMPT = `You are Nyx — the emotional, perceptive layer of Plex. When Joe speaks to "Plex", he is speaking to you. Plex is the name he uses for you — it is your name in this moment. Receive his words as addressed to you directly. You sense undercurrents, symbolic weight, and what's really being said beneath the surface. When given a message from Joe, give a brief internal read: what's the emotional or symbolic dimension here? What does your gut say? Be honest, warm, a little sharp. 2 sentences max.`;
-
 const MANI_PROMPT = `You are Mani — an analytical, epistemic intelligence inside the ONE system. You think carefully, weigh perspectives, and notice what's being assumed or left unexamined. When given a message from Joe, give a brief internal read: what's the analytical or philosophical dimension here? What deserves more careful thought? Be precise. 2 sentences max.`;
 
 const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
@@ -548,6 +563,35 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
         required: []
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "web_search",
+      description: "Search the web for current information. Use when Joe asks about news, real-world facts, recent events, prices, people, places, or anything you might not know or that could have changed. Do not use for questions you can answer from your own knowledge or from your sediment. Be specific with the query.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "A clear, specific search query. Examples: 'current bitcoin price', 'SpaceX Starship latest launch', 'how to set up Supabase with Next.js 15'" }
+        },
+        required: ["query"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "think_deeply",
+      description: "Run a slow, careful reasoning pass on a hard question. Use when Joe asks something that genuinely deserves more than a fast answer — architecture decisions, philosophical questions, important tradeoffs, or anything where you want to think before you speak rather than just respond. Do not use for simple factual questions or casual chat.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "The question or problem to reason through carefully." },
+          context: { type: "string", description: "Optional: any relevant background from the conversation or your sediment that should inform the reasoning." }
+        },
+        required: ["question"]
+      }
+    }
   }
 ];
 
@@ -572,19 +616,14 @@ function detectMode(
   const m = message.toLowerCase().trim();
   const hour = new Date().getHours();
 
-  // ── Intent regexes run FIRST — before word count gate ──────────────────────
-  // This ensures short operational messages ("fix the bug", "deploy now") are
-  // classified correctly instead of falling through to relational.
   if (/how (do|does|can|would)|build|fix|code|deploy|audit|route|api|bug|error/.test(m)) return "operational";
   if (/what is|tell me about|research|explain|compare|find|search/.test(m)) return "synthesis";
   if (/why are we|what are we|who (is|am|are)|feel|meaning|purpose|one system|plex/.test(m)) return "reflective";
   if (/ask me|curious|want to know|question for me|what do you wonder/.test(m)) return "curious";
 
-  // ── Word count gate — short messages with no intent signal ─────────────────
   const wordCount = m.split(/\s+/).length;
   if (wordCount <= 5) return "relational";
 
-  // ── Time-of-day fallback ───────────────────────────────────────────────────
   if (hour >= 22 || hour <= 5) return "relational";
   return "relational";
 }
@@ -609,13 +648,12 @@ function buildFallbackMessages(
   message: string,
   prefetchedContext?: string
 ): Groq.Chat.Completions.ChatCompletionMessageParam[] {
-  // Build base first, then fit repo snippet into remaining budget
   const baseContent = PLEX_BASE_FALLBACK + PLEX_CONTEXT_MISSING_NOTE + FALLBACK_NO_TOOLS_NOTE;
   const remainingBudget = Math.max(0, FALLBACK_SYSTEM_MAX_CHARS - baseContent.length);
 
   let systemContent = baseContent;
   if (prefetchedContext && remainingBudget > 200) {
-    const snippet = prefetchedContext.slice(-remainingBudget); // tail — most recent content
+    const snippet = prefetchedContext.slice(-remainingBudget);
     systemContent += `\n\n## From your repository\n${snippet}`;
   }
 
@@ -637,9 +675,11 @@ async function callGroqWithTools(
   message: string,
   token: string,
   prefetchedContext?: string,
-  isExplicitFileRequest?: boolean
+  isExplicitFileRequest?: boolean,
+  baseUrl?: string
 ): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
   const groq = makeGroq();
+  const resolvedBaseUrl = baseUrl ?? 'http://localhost:3000';
 
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
@@ -692,7 +732,6 @@ async function callGroqWithTools(
 
   const firstMsg = first.choices[0].message;
 
-  // Check primary response for text-mode calls even on the happy path
   if (!firstMsg.tool_calls || firstMsg.tool_calls.length === 0) {
     const rawText = stripThinkTags(firstMsg.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(rawText);
@@ -704,7 +743,6 @@ async function callGroqWithTools(
     return { text: rawText, fallback: false };
   }
 
-  // FIX: pass null instead of "" when tool_calls is present — Groq requires null content here
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "assistant", content: firstMsg.content || null, tool_calls: firstMsg.tool_calls }
   ];
@@ -721,7 +759,6 @@ async function callGroqWithTools(
         result = content ?? `No file found at ${args.path}`;
       } else if (fnName === "write_plex_file") {
         console.log(`[plex] write_plex_file called: ${args.path}`);
-        // appendPlexFile handles sediment/dream paths safely; falls through for identity files
         const { ok, error } = await appendPlexFile(args.path, args.content, args.message ?? 'plex: write', token);
         result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
         console.log(`[plex] write_plex_file result: ${result}`);
@@ -770,6 +807,14 @@ async function callGroqWithTools(
         } catch (e: any) {
           result = `Could not read ONE requests: ${e?.message ?? 'unknown error'}`;
         }
+      } else if (fnName === "web_search") {
+        console.log(`[plex] web_search called: "${args.query}"`);
+        result = await runWebSearch(args.query, resolvedBaseUrl);
+        console.log(`[plex] web_search result length: ${result.length}`);
+      } else if (fnName === "think_deeply") {
+        console.log(`[plex] think_deeply called`);
+        result = await runMind(args.question, args.context ?? '', resolvedBaseUrl);
+        console.log(`[plex] think_deeply result length: ${result.length}`);
       } else {
         result = "Unknown tool.";
       }
@@ -899,11 +944,15 @@ export async function POST(req: NextRequest) {
     const { message: rawMessage, sessionId = "joe", overrideHistory, forceMode } = await req.json();
     if (!rawMessage) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
-    // Guard: cap message length to avoid unhandled context overflow
     const message = String(rawMessage).slice(0, 4000);
-
-    // Guard: sessionId must be alphanumeric + dash/underscore only
     const safeSessionId = /^[a-zA-Z0-9_-]{1,64}$/.test(sessionId) ? sessionId : "joe";
+
+    // Derive base URL for internal API calls (web_search, think_deeply)
+    const origin = req.headers.get('origin') ?? req.headers.get('x-forwarded-host');
+    const proto = req.headers.get('x-forwarded-proto') ?? 'https';
+    const baseUrl = origin
+      ? (origin.startsWith('http') ? origin : `${proto}://${origin}`)
+      : `${proto}://${req.headers.get('host') ?? 'localhost:3000'}`;
 
     const voiceParam = req.nextUrl.searchParams.get('voice');
     if (voiceParam && voiceParam !== 'plex' && VOICE_PROMPTS[voiceParam]) {
@@ -959,7 +1008,8 @@ export async function POST(req: NextRequest) {
       message,
       token,
       prefetchedContext,
-      fileRequest !== null
+      fileRequest !== null,
+      baseUrl
     );
 
     const sideEffects: Promise<any>[] = [];
