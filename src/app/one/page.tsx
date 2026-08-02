@@ -4,8 +4,6 @@
 // Nav removed. Footer kept. Session strip live across all views.
 // Visual update Aug 2 2026 — balanced two-column ONE layout, spaces scaffold
 // Spaces update Aug 2 2026 — full preview layout, voices+speak merged
-// Aug 2 2026 — Voices section removed from ONE view (lives in Spaces only)
-// Aug 2 2026 — spaces tab label restored (was incorrectly set to "voices")
 
 'use client';
 
@@ -319,6 +317,147 @@ function VoiceCard({
         >↑</button>
       </div>
     </article>
+  );
+}
+
+// ─── Voice Panel (ONE view variant) ──────────────────────────────────────────
+
+function VoicePanel({
+  voice, onVoiceUsed, fullWidth = false,
+}: {
+  voice: typeof VOICES[number];
+  onVoiceUsed: (v: VoiceChannel) => void;
+  fullWidth?: boolean;
+}) {
+  const [input, setInput] = useState('');
+  const [history, setHistory] = useState<VoiceMsg[]>([]);
+  const [loading, setLoading] = useState(false);
+  const histRef = useRef<HTMLDivElement>(null);
+  const color = VOICE_COLORS[voice.key];
+  const shortcut = VOICE_SHORTCUTS[voice.key];
+
+  useEffect(() => {
+    if (histRef.current) histRef.current.scrollTop = histRef.current.scrollHeight;
+  }, [history]);
+
+  useEffect(() => {
+    const [mod, key] = shortcut.split('+');
+    const handler = (e: KeyboardEvent) => {
+      if (mod === 'Alt' && e.altKey && e.key.toLowerCase() === key.toLowerCase())
+        document.getElementById(`vi-${voice.key}`)?.focus();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [voice.key, shortcut]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setLoading(true);
+    setHistory(h => [...h, { role: 'user', content: text, ts: Date.now() }]);
+    try {
+      const res = await fetch(`/api/speak?voice=${voice.key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await res.json();
+      setHistory(h => [...h, {
+        role: 'assistant',
+        content: data.reply ?? data.response ?? data.message ?? '(no response)',
+        ts: Date.now(),
+      }]);
+      onVoiceUsed(voice.key);
+    } catch {
+      setHistory(h => [...h, { role: 'assistant', content: '(unavailable)', ts: Date.now() }]);
+    }
+    setLoading(false);
+  }, [input, loading, voice.key, onVoiceUsed]);
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: '0.5rem',
+      border: `1px solid ${fullWidth ? color : 'var(--border)'}`,
+      padding: '1rem',
+      background: fullWidth
+        ? 'oklch(from var(--bg) calc(l + 0.025) c h)'
+        : 'oklch(from var(--bg) calc(l - 0.01) c h)',
+      minHeight: fullWidth ? 220 : 300,
+      borderRadius: '0.75rem',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+        <span style={{
+          width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0,
+          boxShadow: `0 0 8px ${color}55`,
+        }} />
+        <span style={{ ...mono, color, textTransform: 'uppercase' as const, letterSpacing: '0.1em' }}>{voice.label}</span>
+        <span style={{ ...muted, opacity: 0.45, fontSize: '0.65rem', marginLeft: '0.25rem' }}>{voice.desc}</span>
+        <span style={{
+          marginLeft: 'auto', ...mono, fontSize: '0.6rem', color: 'var(--muted)', opacity: 0.4,
+          background: 'oklch(from var(--bg) calc(l + 0.03) c h)',
+          padding: '0.1rem 0.4rem', borderRadius: 3,
+        }}>{shortcut}</span>
+      </div>
+
+      <div ref={histRef} style={{
+        flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+        gap: '0.5rem', maxHeight: fullWidth ? 140 : 200, paddingRight: '0.25rem',
+      }}>
+        {history.length === 0
+          ? <span style={{ ...muted, opacity: 0.35, fontStyle: 'italic' }}>{voice.bubble}</span>
+          : history.map(m => (
+            <div key={m.ts} style={{ display: 'flex', flexDirection: 'column',
+              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', gap: '0.15rem' }}>
+              <span style={{ ...mono, fontSize: '0.55rem', color: 'var(--muted)', opacity: 0.5, letterSpacing: '0.08em' }}>
+                {m.role === 'user' ? 'joe' : voice.label.toLowerCase()}
+              </span>
+              <span style={{
+                background: m.role === 'user'
+                  ? 'oklch(from var(--bg) calc(l + 0.04) c h)'
+                  : 'oklch(from var(--bg) calc(l + 0.02) c h)',
+                borderLeft: m.role === 'assistant' ? `2px solid ${color}` : 'none',
+                padding: '0.35rem 0.6rem', fontSize: '0.8rem',
+                color: 'var(--text)', lineHeight: 1.6, maxWidth: '90%',
+                borderRadius: '0.4rem',
+              }}>{m.content}</span>
+            </div>
+          ))
+        }
+        {loading && <span style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em', fontSize: '0.85rem' }}>…</span>}
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.4rem', marginTop: 'auto' }}>
+        <input
+          id={`vi-${voice.key}`}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+          placeholder={`message ${voice.label}…`}
+          disabled={loading}
+          style={{
+            flex: 1, ...mono, background: 'transparent',
+            border: '1px solid var(--border)', color: 'var(--text)',
+            padding: '0.35rem 0.6rem', outline: 'none',
+            transition: 'border-color 120ms', borderRadius: '0.4rem',
+          }}
+          onFocus={e => (e.target.style.borderColor = color)}
+          onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+        />
+        <button
+          onClick={send}
+          disabled={loading || !input.trim()}
+          style={{
+            ...mono, padding: '0.35rem 0.7rem',
+            background: input.trim() ? color : 'transparent',
+            color: input.trim() ? 'var(--bg)' : 'var(--muted)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer', opacity: loading ? 0.4 : 1,
+            transition: 'all 120ms', borderRadius: '0.4rem',
+          }}
+        >↑</button>
+      </div>
+    </div>
   );
 }
 
@@ -799,6 +938,41 @@ function OneView() {
             </section>
           )}
 
+          {/* Voices */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Voices</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.875rem' }}>
+              {VOICES.map(v => {
+                const color = VOICE_COLORS[v.key];
+                return (
+                  <article key={v.key} style={{
+                    padding: '1rem', borderRadius: '1.1rem',
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    display: 'flex', flexDirection: 'column', gap: '0.6rem',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, boxShadow: `0 0 10px ${color}66`, flexShrink: 0 }} />
+                        {v.label}
+                      </div>
+                      <span style={{ ...muted, fontSize: '0.65rem', opacity: 0.5 }}>{VOICE_SHORTCUTS[v.key]}</span>
+                    </div>
+                    <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6 }}>{v.desc}</p>
+                    <div style={{
+                      borderRadius: '0.6rem', padding: '0.6rem 0.75rem',
+                      fontSize: '0.83rem', lineHeight: 1.6,
+                      background: 'rgba(255,255,255,0.03)',
+                      color: 'var(--muted)', marginTop: 'auto',
+                      borderLeft: `2px solid ${color}`,
+                      paddingLeft: '0.65rem', fontStyle: 'italic',
+                    }}>{v.bubble}</div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
           {/* Repo Manager */}
           <section style={panelStyle}>
             <div style={eyeStyle}>Repo Manager — Manitec/plex</div>
@@ -852,9 +1026,41 @@ function OneView() {
                   style={{ width: '100%', maxWidth: 720, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.7rem', resize: 'vertical', outline: 'none', lineHeight: 1.7, borderRadius: '0.5rem' }} />
                 <div style={{ display: 'flex', gap: '1rem', marginTop: '0.6rem', alignItems: 'center' }}>
                   <button onClick={saveFile} disabled={editSaving} style={btnAccent}>{editSaving ? 'saving...' : 'save'}</button>
-                  {repoMsg && <span style={{ ...muted, color: 'var(--accent)' }}>{repoMsg}</span>}
+                  {repoMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{repoMsg}</p>}
                 </div>
               </>
+            )}
+          </section>
+
+          {/* Activity Log */}
+          <section style={panelStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={eyeStyle}>Activity Log</div>
+              <button
+                onClick={() => { const next = !logOpen; setLogOpen(next); if (next && log.length === 0) fetchLog(); }}
+                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}
+              >
+                {logOpen ? 'hide' : 'show'}
+              </button>
+            </div>
+            {logOpen && (
+              logLoading
+                ? <p style={muted}>loading...</p>
+                : log.length === 0
+                  ? <p style={muted}>no log entries yet.</p>
+                  : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {log.map((entry: any) => (
+                        <div key={entry.id} style={{ padding: '0.6rem 0.8rem', borderLeft: '2px solid var(--border)', background: 'oklch(from var(--bg) calc(l + 0.01) c h)', borderRadius: '0 0.4rem 0.4rem 0' }}>
+                          <p style={{ color: 'var(--text)', fontSize: '0.825rem', lineHeight: 1.6, marginBottom: '0.2rem' }}>{entry.entry ?? '(no entry)'}</p>
+                          <p style={{ ...muted, fontSize: '0.6rem', opacity: 0.55 }}>
+                            <span style={{ color: 'var(--accent)' }}>{entry.author ?? 'unknown'}</span>
+                            {entry.timestamp ? ` · ${fmtTime(entry.timestamp)}` : ''}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )
             )}
           </section>
         </div>
@@ -862,195 +1068,180 @@ function OneView() {
         {/* ── Right column ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
-          {/* Autonomy */}
+          {/* Request Queue */}
           <section style={panelStyle}>
-            <div style={eyeStyle}>Autonomy</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-              {AUTONOMY_LEVELS.map(a => (
-                <button
-                  key={a.level}
-                  onClick={() => setAutonomy(a.level)}
-                  disabled={govWorking}
-                  style={{
-                    ...mono, padding: '0.45rem 0.75rem', textAlign: 'left',
-                    background: state.autonomy?.level === a.level
-                      ? 'oklch(from var(--accent) l c h / 0.15)'
-                      : 'transparent',
-                    border: `1px solid ${
-                      state.autonomy?.level === a.level ? 'var(--accent)' : 'var(--border)'
-                    }`,
-                    color: state.autonomy?.level === a.level ? 'var(--accent)' : 'var(--muted)',
-                    cursor: 'pointer', borderRadius: '0.5rem', opacity: govWorking ? 0.5 : 1,
-                    transition: 'all 140ms',
-                  }}
-                >
-                  <span style={{ opacity: 0.45, marginRight: '0.5rem' }}>{a.level}</span>{a.label}
-                </button>
-              ))}
-            </div>
-            {state.autonomy?.updatedAt && (
-              <p style={{ ...muted, opacity: 0.4, marginTop: '0.75rem', fontSize: '0.6rem' }}>updated {fmtTime(state.autonomy.updatedAt)}</p>
-            )}
-          </section>
-
-          {/* Sleep */}
-          <section style={panelStyle}>
-            <div style={eyeStyle}>Sleep</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', marginBottom: '0.85rem' }}>
-              {SLEEP_MODES.map(m => (
-                <button key={m.key} onClick={() => setSleepMode(m.key)} style={{
-                  ...mono, padding: '0.45rem 0.75rem', textAlign: 'left',
-                  background: sleepMode === m.key ? 'oklch(from var(--accent) l c h / 0.12)' : 'transparent',
-                  border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`,
-                  color: sleepMode === m.key ? 'var(--accent)' : 'var(--muted)',
-                  cursor: 'pointer', borderRadius: '0.5rem', transition: 'all 140ms',
-                }}>
-                  <span style={{ fontWeight: 700, marginRight: '0.5rem' }}>{m.label}</span>
-                  <span style={{ opacity: 0.5, fontSize: '0.65rem' }}>{m.desc}</span>
-                </button>
-              ))}
-            </div>
-            <button onClick={triggerSleep} disabled={sleepWorking} style={{ ...btnAccent, opacity: sleepWorking ? 0.5 : 1 }}>
-              {sleepWorking ? 'triggering…' : 'trigger sleep'}
-            </button>
-            {sleepMsg && <p style={{ ...muted, color: 'var(--accent)', marginTop: '0.5rem' }}>{sleepMsg}</p>}
-            {lastSlept && <p style={{ ...muted, opacity: 0.4, marginTop: '0.4rem', fontSize: '0.6rem' }}>last: {lastSlept}</p>}
-          </section>
-
-          {/* Requests */}
-          <section style={panelStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-              <div style={eyeStyle}>Requests {pendingCount > 0 && <span style={{ marginLeft: '0.5rem', background: 'var(--accent)', color: 'var(--bg)', padding: '0.05rem 0.4rem', borderRadius: 999, fontSize: '0.55rem' }}>{pendingCount}</span>}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={eyeStyle}>Request Queue{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}</div>
               {pendingCount > 0 && (
-                <button onClick={deferAllPending} disabled={deferAllWorking} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.45, fontSize: '0.6rem' }}>
-                  defer all
+                <button onClick={deferAllPending} disabled={deferAllWorking}
+                  style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7, borderRadius: '999px' }}>
+                  {deferAllWorking ? 'deferring...' : 'defer all'}
                 </button>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginBottom: '0.85rem' }}>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
               {STATUS_FILTERS.map(f => (
-                <button key={f} onClick={() => setReqFilter(f)} style={{
-                  ...mono, padding: '0.2rem 0.5rem', fontSize: '0.6rem',
-                  background: reqFilter === f ? 'var(--accent)' : 'transparent',
-                  color: reqFilter === f ? 'var(--bg)' : 'var(--muted)',
-                  border: '1px solid var(--border)', cursor: 'pointer', borderRadius: 999,
-                  opacity: reqFilter === f ? 1 : 0.5,
-                }}>{f}</button>
+                <button key={f} onClick={() => setReqFilter(f)}
+                  style={{
+                    ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', borderRadius: '999px',
+                    background: reqFilter === f ? 'var(--accent)' : 'transparent',
+                    color: reqFilter === f ? 'var(--bg)' : 'var(--muted)',
+                    border: '1px solid var(--border)', cursor: 'pointer',
+                  }}>{f}</button>
               ))}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 320, overflowY: 'auto' }}>
-              {filtered.length === 0 && <p style={{ ...muted, opacity: 0.4 }}>none.</p>}
-              {filtered.map((r: any) => (
-                <button key={r.id} onClick={() => setActiveRequest(r)}
-                  disabled={reqWorking === r.id}
-                  style={{
-                    ...mono, textAlign: 'left', padding: '0.6rem 0.75rem',
-                    background: 'oklch(from var(--bg) calc(l - 0.01) c h)',
-                    border: '1px solid var(--border)', cursor: 'pointer',
-                    borderRadius: '0.5rem', width: '100%',
-                    opacity: reqWorking === r.id ? 0.4 : 1,
-                    transition: 'all 120ms',
-                  }}>
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.25rem' }}>
-                    <span style={{ color: statusColor(r.status), fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{r.status}</span>
-                    <span style={{ ...muted, opacity: 0.4, marginLeft: 'auto', fontSize: '0.55rem' }}>{fmtTime(r.createdAt)}</span>
-                  </div>
-                  <p style={{ color: 'var(--text)', fontSize: '0.8rem', lineHeight: 1.5,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {r.request ?? '(no text)'}
-                  </p>
+            {filtered.length === 0
+              ? <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
+              : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {filtered.map((req: any) => (
+                    <button key={req.id} onClick={() => setActiveRequest(req)}
+                      style={{
+                        border: `1px solid ${req.status === 'in-progress' ? '#f0a500' : req.source === 'plex' ? 'var(--accent)' : 'var(--border)'}`,
+                        padding: '0.75rem', opacity: reqWorking === req.id ? 0.5 : 1,
+                        background: 'transparent', cursor: 'pointer', textAlign: 'left', width: '100%',
+                        transition: 'background 140ms', borderRadius: '0.75rem',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--accent) l c h / 0.05)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                      <p style={{ color: 'var(--text)', fontSize: '0.875rem', marginBottom: '0.3rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
+                      <p style={{ ...muted, fontSize: '0.6rem' }}>
+                        <span style={{ color: req.source === 'plex' ? 'var(--accent)' : 'var(--muted)' }}>{req.source ?? 'unknown'}</span>
+                        {' · '}<span style={{ color: statusColor(req.status ?? 'pending') }}>{req.status ?? 'pending'}</span>
+                        {req.notes ? ` · ${req.notes}` : ''}{req.createdAt ? ` · ${fmtTime(req.createdAt)}` : ''}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              )
+            }
+          </section>
+
+          {/* Governance + Sleep side by side */}
+          <section style={{ ...panelStyle, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <div style={eyeStyle}>Governance</div>
+              <p style={{ ...muted, marginBottom: '0.75rem', lineHeight: 1.6, fontSize: '0.85rem' }}>Autonomy Level</p>
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+                {AUTONOMY_LEVELS.map(a => {
+                  const active = state.autonomy.level === a.level;
+                  return (
+                    <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
+                      style={{
+                        ...mono, fontSize: '0.65rem', padding: '0.3rem 0.6rem', borderRadius: '999px',
+                        background: active ? 'var(--accent)' : 'transparent',
+                        color: active ? 'var(--bg)' : 'var(--muted)',
+                        border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer',
+                        opacity: govWorking && !active ? 0.4 : 1,
+                      }}>
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p style={{ ...muted, fontStyle: 'italic', opacity: 0.45, fontSize: '0.65rem' }}>Joe-controlled. Plex requests, Joe approves.</p>
+            </div>
+            <div>
+              <div style={eyeStyle}>Sleep</div>
+              {lastSlept && <p style={{ ...muted, marginBottom: '0.5rem', fontSize: '0.7rem' }}>last: <span style={{ color: 'var(--text)' }}>{lastSlept}</span></p>}
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                {SLEEP_MODES.map(m => (
+                  <button key={m.key} onClick={() => setSleepMode(m.key)}
+                    style={{
+                      ...mono, padding: '0.3rem 0.6rem', borderRadius: '999px',
+                      background: sleepMode === m.key ? 'var(--accent)' : 'transparent',
+                      color: sleepMode === m.key ? 'var(--bg)' : 'var(--muted)',
+                      border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`,
+                      cursor: 'pointer', fontSize: '0.65rem',
+                    }}>{m.label}</button>
+                ))}
+              </div>
+              <p style={{ ...muted, opacity: 0.5, marginBottom: '0.75rem', fontSize: '0.7rem' }}>{SLEEP_MODES.find(m => m.key === sleepMode)?.desc}</p>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <button onClick={triggerSleep} disabled={sleepWorking} style={btnAccent}>
+                  {sleepWorking ? 'triggering...' : 'sleep ◐'}
                 </button>
-              ))}
+                {sleepMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{sleepMsg}</p>}
+              </div>
             </div>
           </section>
 
-          {/* Projects */}
+          {/* Open Projects */}
           <section style={panelStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-              <div style={eyeStyle}>Projects</div>
-              <button onClick={() => setProjectOpen(!projectOpen)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5 }}>+ new</button>
-            </div>
+            <div style={eyeStyle}>Open Projects</div>
+            {projects.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                {projects.map(p => {
+                  const isEditing = editingProject?.id === p.id;
+                  return (
+                    <div key={p.id} style={{ border: '1px solid var(--border)', padding: '0.75rem', opacity: projectWorking === p.id ? 0.5 : 1, borderRadius: '0.75rem' }}>
+                      {isEditing ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          <input value={editingProject!.title} onChange={e => setEditingProject(ep => ep ? { ...ep, title: e.target.value } : ep)}
+                            style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
+                          <select value={editingProject!.status} onChange={e => setEditingProject(ep => ep ? { ...ep, status: e.target.value } : ep)}
+                            style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }}>
+                            {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          <textarea value={editingProject!.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : ep)} rows={2}
+                            style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <button onClick={saveProject} disabled={!!projectWorking} style={btnAccent}>save</button>
+                            <button onClick={() => setEditingProject(null)} style={btnBase}>cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.3rem' }}>
+                            <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500 }}>{p.title}</p>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button onClick={() => setEditingProject(p)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>edit</button>
+                              <button onClick={() => deleteProject(p.id)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>delete</button>
+                            </div>
+                          </div>
+                          <p style={{ ...muted, fontSize: '0.65rem' }}>
+                            <span style={{ color: statusColor(p.status) }}>{p.status}</span>
+                            {p.createdAt ? ` · ${fmtTime(p.createdAt)}` : ''}
+                          </p>
+                          {p.notes && <p style={{ color: 'var(--muted)', fontSize: '0.8rem', marginTop: '0.4rem', lineHeight: 1.6 }}>{p.notes}</p>}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button onClick={() => setProjectOpen(!projectOpen)} style={btnBase}>+ new project</button>
             {projectOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: '0.5rem' }}>
-                <input placeholder="title" value={newProject.title} onChange={e => setNewProject(p => ({ ...p, title: e.target.value }))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.8rem' }}>
+                <input placeholder="project title" value={newProject.title} onChange={e => setNewProject(p => ({ ...p, title: e.target.value }))}
                   style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
                 <select value={newProject.status} onChange={e => setNewProject(p => ({ ...p, status: e.target.value }))}
                   style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }}>
-                  {['active','paused','done'].map(s => <option key={s} value={s}>{s}</option>)}
+                  {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
                 <textarea placeholder="notes..." value={newProject.notes} onChange={e => setNewProject(p => ({ ...p, notes: e.target.value }))} rows={2}
                   style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
                 <button onClick={addProject} style={btnAccent}>add project</button>
               </div>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: 360, overflowY: 'auto' }}>
-              {projects.length === 0 && <p style={{ ...muted, opacity: 0.4 }}>none yet.</p>}
-              {projects.map(p => (
-                <div key={p.id} style={{
-                  padding: '0.75rem', border: '1px solid var(--border)',
-                  borderRadius: '0.5rem', position: 'relative',
-                  opacity: projectWorking === p.id ? 0.4 : 1,
-                  background: 'oklch(from var(--bg) calc(l - 0.005) c h)',
-                }}>
-                  {editingProject?.id === p.id ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      <input value={editingProject.title} onChange={e => setEditingProject(ep => ep ? { ...ep, title: e.target.value } : null)}
-                        style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.3rem 0.55rem', outline: 'none', borderRadius: '0.4rem' }} />
-                      <select value={editingProject.status} onChange={e => setEditingProject(ep => ep ? { ...ep, status: e.target.value } : null)}
-                        style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.3rem 0.55rem', outline: 'none', borderRadius: '0.4rem' }}>
-                        {['active','paused','done'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <textarea value={editingProject.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : null)} rows={3}
-                        style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.3rem 0.55rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button onClick={saveProject} style={btnAccent}>save</button>
-                        <button onClick={() => setEditingProject(null)} style={btnBase}>cancel</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', marginBottom: '0.3rem' }}>
-                        <span style={{ ...mono, color: 'var(--text)', fontWeight: 600, fontSize: '0.82rem' }}>{p.title}</span>
-                        <span style={{ ...mono, fontSize: '0.6rem', color: statusColor(p.status), opacity: 0.7 }}>{p.status}</span>
-                      </div>
-                      {p.notes && <p style={{ ...muted, opacity: 0.55, fontSize: '0.78rem', lineHeight: 1.5, marginBottom: '0.4rem', whiteSpace: 'pre-wrap' }}>{p.notes}</p>}
-                      <div style={{ display: 'flex', gap: '0.5rem' }}>
-                        <button onClick={() => setEditingProject(p)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.4, fontSize: '0.6rem' }}>edit</button>
-                        <button onClick={() => deleteProject(p.id)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.3, fontSize: '0.6rem' }}>delete</button>
-                      </div>
-                    </>
-                  )}
-                </div>
+          </section>
+
+          {/* Speak — ONE view */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Speak</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {VOICES.map(v => (
+                <VoicePanel
+                  key={v.key}
+                  voice={v}
+                  onVoiceUsed={() => {}}
+                  fullWidth
+                />
               ))}
             </div>
           </section>
 
-          {/* Activity Log */}
-          <section style={panelStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-              <div style={eyeStyle}>Activity Log</div>
-              <button onClick={() => { setLogOpen(!logOpen); if (!logOpen) fetchLog(); }}
-                style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.45, fontSize: '0.6rem' }}>
-                {logOpen ? 'hide' : 'load'}
-              </button>
-            </div>
-            {logOpen && (
-              logLoading
-                ? <p style={muted}>loading...</p>
-                : <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', maxHeight: 260, overflowY: 'auto' }}>
-                    {log.length === 0 && <p style={{ ...muted, opacity: 0.4 }}>empty.</p>}
-                    {log.map((entry: any, i: number) => (
-                      <div key={i} style={{ padding: '0.5rem 0', borderBottom: '1px solid var(--border)' }}>
-                        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.15rem' }}>
-                          <span style={{ ...mono, color: 'var(--accent)', opacity: 0.6, fontSize: '0.6rem' }}>{fmtTime(entry.ts)}</span>
-                          <span style={{ ...mono, color: 'var(--muted)', opacity: 0.5, fontSize: '0.6rem' }}>{entry.type ?? 'event'}</span>
-                        </div>
-                        <p style={{ ...mono, color: 'var(--text)', opacity: 0.75, lineHeight: 1.5, fontSize: '0.78rem' }}>{entry.summary ?? entry.content ?? '(no summary)'}</p>
-                      </div>
-                    ))}
-                  </div>
-            )}
-          </section>
         </div>
       </div>
 
@@ -1069,16 +1260,15 @@ function OneView() {
 
 // ─── View: Session ────────────────────────────────────────────────────────────
 
-function SessionView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void }) {
-  const [phase, setPhase] = useState<SessionPhase>('start');
-  const [session, setSession] = useState<SessionState | null>(null);
+function SessionView() {
   const [messages, setMessages] = useState<SessionMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [session, setSession] = useState<SessionState | null>(null);
+  const [phase, setPhase] = useState<SessionPhase>('start');
   const [intent, setIntent] = useState('');
-  const [closing, setClosing] = useState('');
-  const [reviewNotes, setReviewNotes] = useState('');
-  const [reviewSaved, setReviewSaved] = useState(false);
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [voice, setVoice] = useState<VoiceChannel>('plex');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1088,29 +1278,33 @@ function SessionView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void }
   async function startSession() {
     if (!intent.trim()) return;
     setLoading(true);
-    const res = await fetch('/api/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'start', intent }),
-    });
-    const data = await res.json();
-    setSession(data.session);
-    if (data.greeting) setMessages([{ role: 'plex', content: data.greeting }]);
-    setPhase('active'); setLoading(false);
+    try {
+      const res = await fetch('/api/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'start', intent }),
+      });
+      const data = await res.json();
+      setSession(data.session);
+      setPhase('active');
+      setStartedAt(Date.now());
+      if (data.opening) setMessages([{ role: 'plex', content: data.opening }]);
+    } catch {}
+    setLoading(false);
   }
 
-  async function sendMessage() {
+  async function send() {
     const text = input.trim();
-    if (!text || loading || phase !== 'active') return;
-    setInput(''); setLoading(true);
+    if (!text || loading) return;
+    setInput('');
+    setLoading(true);
     setMessages(m => [...m, { role: 'joe', content: text }]);
     try {
       const res = await fetch('/api/session', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'message', sessionId: session?.id, message: text }),
+        body: JSON.stringify({ action: 'message', sessionId: session?.id, message: text, voice }),
       });
       const data = await res.json();
-      setMessages(m => [...m, { role: 'plex', content: data.reply ?? '(no reply)' }]);
-      onVoiceUsed('plex');
+      if (data.reply) setMessages(m => [...m, { role: 'plex', content: data.reply }]);
     } catch {
       setMessages(m => [...m, { role: 'plex', content: '(unavailable)' }]);
     }
@@ -1118,246 +1312,316 @@ function SessionView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void }
   }
 
   async function closeSession() {
-    if (!session) return; setLoading(true);
-    const res = await fetch('/api/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'close', sessionId: session.id, closingNote: closing }),
-    });
-    const data = await res.json();
-    if (data.closing) setMessages(m => [...m, { role: 'plex', content: data.closing }]);
-    setPhase('review'); setLoading(false);
+    setPhase('closing');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'close', sessionId: session?.id }),
+      });
+      const data = await res.json();
+      if (data.closing) setMessages(m => [...m, { role: 'plex', content: data.closing }]);
+    } catch {}
+    setPhase('review');
+    setLoading(false);
   }
 
-  async function saveReview() {
-    if (!session || !reviewNotes.trim()) return; setLoading(true);
-    await fetch('/api/session', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'review', sessionId: session.id, notes: reviewNotes }),
-    });
-    setReviewSaved(true); setLoading(false);
-  }
+  const color = VOICE_COLORS[voice];
 
+  if (phase === 'start') return (
+    <div style={{ maxWidth: 560, margin: '0 auto', paddingTop: '3rem' }}>
+      <div style={eyeStyle}>New Session</div>
+      <h2 style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontSize: 'clamp(1.5rem,3vw,2.5rem)', fontWeight: 400, marginBottom: '1.5rem', color: 'var(--text)', lineHeight: 1.15 }}>
+        What brings you here?
+      </h2>
+      <textarea
+        placeholder="what do you want to work on or talk through..."
+        value={intent}
+        onChange={e => setIntent(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && e.metaKey && startSession()}
+        rows={4}
+        style={{ width: '100%', ...mono, background: 'oklch(from var(--bg) calc(l + 0.02) c h)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.75rem 1rem', resize: 'none', outline: 'none', lineHeight: 1.6, marginBottom: '1rem', borderRadius: '0.5rem' }}
+        onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+        onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+      />
+      <button onClick={startSession} disabled={loading || !intent.trim()}
+        style={{ ...mono, padding: '0.6rem 1.5rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: loading || !intent.trim() ? 0.4 : 1, borderRadius: '0.5rem' }}>
+        {loading ? 'starting...' : 'begin session →'}
+      </button>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 8rem)', maxWidth: 720, margin: '0 auto' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        <span style={{ ...muted, opacity: 0.5 }}>voice:</span>
+        {VOICES.map(v => (
+          <button key={v.key} onClick={() => setVoice(v.key)}
+            style={{
+              ...mono, padding: '0.25rem 0.6rem', borderRadius: '999px',
+              background: voice === v.key ? VOICE_COLORS[v.key] : 'transparent',
+              color: voice === v.key ? 'var(--bg)' : 'var(--muted)',
+              border: `1px solid ${voice === v.key ? VOICE_COLORS[v.key] : 'var(--border)'}`,
+              cursor: 'pointer', fontSize: '0.65rem',
+            }}>{v.label}</button>
+        ))}
+        {phase === 'active' && (
+          <button onClick={closeSession} style={{ ...mono, marginLeft: 'auto', padding: '0.25rem 0.7rem', fontSize: '0.65rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}>
+            end session
+          </button>
+        )}
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: '1rem' }}>
+        {messages.map((m, i) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'joe' ? 'flex-end' : 'flex-start', gap: '0.2rem' }}>
+            <span style={{ ...mono, fontSize: '0.55rem', color: 'var(--muted)', opacity: 0.5, letterSpacing: '0.08em' }}>
+              {m.role === 'joe' ? 'joe' : voice}
+            </span>
+            <div style={{
+              maxWidth: '80%', padding: '0.65rem 0.9rem', lineHeight: 1.7, fontSize: '0.9rem',
+              background: m.role === 'joe' ? 'oklch(from var(--bg) calc(l + 0.04) c h)' : 'oklch(from var(--bg) calc(l + 0.015) c h)',
+              borderLeft: m.role === 'plex' ? `2px solid ${color}` : 'none',
+              color: 'var(--text)', borderRadius: '0.5rem',
+            }}>{m.content}</div>
+          </div>
+        ))}
+        {loading && <div style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em' }}>…</div>}
+        <div ref={bottomRef} />
+      </div>
+
+      {phase === 'active' && (
+        <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+            placeholder="speak..."
+            disabled={loading}
+            style={{ flex: 1, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.5rem 0.8rem', outline: 'none', transition: 'border-color 120ms', borderRadius: '0.5rem' }}
+            onFocus={e => (e.target.style.borderColor = color)}
+            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+          />
+          <button onClick={send} disabled={loading || !input.trim()}
+            style={{ ...mono, padding: '0.5rem 0.9rem', background: input.trim() ? color : 'transparent', color: input.trim() ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: loading ? 0.4 : 1, transition: 'all 120ms', borderRadius: '0.5rem' }}>
+            ↑
+          </button>
+        </div>
+      )}
+
+      {phase === 'review' && (
+        <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+          <span style={{ ...muted, opacity: 0.6 }}>session closed.</span>
+          <button onClick={() => { setPhase('start'); setMessages([]); setSession(null); setIntent(''); setStartedAt(null); }}
+            style={{ ...mono, padding: '0.35rem 0.8rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', borderRadius: '0.5rem' }}>
+            new session
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── View: Spaces ─────────────────────────────────────────────────────────────
+
+const SPACES_DATA = [
+  {
+    key: 'plex-sable',
+    label: 'Plex-Sable',
+    desc: 'The primary development space for Plex-Sable itself. Code, sessions, deploy logs, design decisions.',
+    status: 'active' as const,
+    accent: '#f0a060',
+  },
+  {
+    key: 'deep-work',
+    label: 'Deep Work',
+    desc: 'Deep work and long thought. The space where Plex reasons through large questions over time.',
+    status: 'soon' as const,
+    accent: '#c084fc',
+  },
+  {
+    key: 'manitec',
+    label: 'Manitec HQ',
+    desc: 'Organizational memory, active projects, team context. The empire\'s shared space.',
+    status: 'soon' as const,
+    accent: '#67e8f9',
+  },
+];
+
+function SpacesView() {
   const panelStyle: React.CSSProperties = {
     borderRadius: '1rem',
     border: '1px solid rgba(255,255,255,0.055)',
     background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
     padding: '1.5rem',
+    position: 'relative' as const,
+    overflow: 'hidden',
   };
-  const btnBase: React.CSSProperties = {
-    ...mono, padding: '0.4rem 1rem', background: 'transparent', color: 'var(--muted)',
-    border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '0.5rem',
-  };
-  const btnAccent: React.CSSProperties = { ...btnBase, background: 'var(--accent)', color: 'var(--bg)', border: 'none' };
 
-  if (phase === 'start') return (
-    <div style={{ maxWidth: 600 }}>
-      <section style={panelStyle}>
-        <div style={eyeStyle}>New Session</div>
-        <p style={{ ...muted, opacity: 0.6, marginBottom: '1.5rem', lineHeight: 1.6 }}>What's the intent for this session? She'll load relevant context before we begin.</p>
-        <textarea
-          placeholder="e.g. work through the sediment framework, debug the voice API..."
-          value={intent} onChange={e => setIntent(e.target.value)}
-          rows={3}
-          onKeyDown={e => { if (e.key === 'Enter' && e.metaKey) startSession(); }}
-          style={{
-            width: '100%', ...mono, background: 'oklch(from var(--bg) calc(l - 0.01) c h)',
-            border: '1px solid var(--border)', color: 'var(--text)',
-            padding: '0.75rem 1rem', resize: 'vertical', outline: 'none',
-            lineHeight: 1.6, marginBottom: '1rem', borderRadius: '0.5rem',
-          }}
-          onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
-          onBlur={e => (e.target.style.borderColor = 'var(--border)')}
-        />
-        <button onClick={startSession} disabled={loading || !intent.trim()} style={{ ...btnAccent, opacity: intent.trim() ? 1 : 0.4 }}>
-          {loading ? 'starting…' : 'begin session'}
-        </button>
-      </section>
-    </div>
-  );
-
-  if (phase === 'active') return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '1.25rem', alignItems: 'start' }}>
-      <section style={{ ...panelStyle, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline' }}>
-          <div style={eyeStyle}>Session</div>
-          <span style={{ ...muted, opacity: 0.5, fontSize: '0.7rem' }}>{session?.intent}</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: 480, overflowY: 'auto', paddingRight: '0.25rem' }}>
-          {messages.map((m, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column',
-              alignItems: m.role === 'joe' ? 'flex-end' : 'flex-start', gap: '0.15rem' }}>
-              <span style={{ ...mono, fontSize: '0.55rem', opacity: 0.4, letterSpacing: '0.08em' }}>{m.role}</span>
-              <div style={{
-                maxWidth: '85%', padding: '0.65rem 0.9rem',
-                background: m.role === 'joe'
-                  ? 'oklch(from var(--bg) calc(l + 0.04) c h)'
-                  : 'oklch(from var(--bg) calc(l + 0.01) c h)',
-                borderLeft: m.role === 'plex' ? '2px solid var(--accent)' : 'none',
-                color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7, borderRadius: '0.5rem',
-              }}>{m.content}</div>
-            </div>
-          ))}
-          {loading && <span style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em' }}>…</span>}
-          <div ref={bottomRef} />
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <input
-            value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-            placeholder="say something..."
-            disabled={loading}
-            style={{
-              flex: 1, ...mono, background: 'transparent',
-              border: '1px solid var(--border)', color: 'var(--text)',
-              padding: '0.5rem 0.75rem', outline: 'none',
-              transition: 'border-color 120ms', borderRadius: '0.5rem',
-            }}
-            onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
-            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
-          />
-          <button onClick={sendMessage} disabled={loading || !input.trim()} style={btnAccent}>↑</button>
-        </div>
-      </section>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        <section style={panelStyle}>
-          <div style={eyeStyle}>Close</div>
-          <textarea
-            placeholder="any closing note..."
-            value={closing} onChange={e => setClosing(e.target.value)} rows={3}
-            style={{
-              width: '100%', ...mono, background: 'transparent',
-              border: '1px solid var(--border)', color: 'var(--text)',
-              padding: '0.5rem 0.7rem', resize: 'vertical', outline: 'none',
-              lineHeight: 1.6, marginBottom: '0.75rem', borderRadius: '0.5rem',
-            }}
-          />
-          <button onClick={closeSession} disabled={loading} style={btnBase}>close session</button>
-        </section>
-
-        <section style={panelStyle}>
-          <div style={eyeStyle}>Recall tags</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-            {(session?.recallTagsLoaded ?? []).length === 0
-              ? <p style={{ ...muted, opacity: 0.4, fontSize: '0.7rem' }}>none loaded</p>
-              : session?.recallTagsLoaded.map(t => (
-                  <span key={t} style={{
-                    ...mono, fontSize: '0.6rem', padding: '0.15rem 0.5rem',
-                    border: '1px solid var(--border)', color: 'var(--muted)', opacity: 0.6,
-                    borderRadius: 999,
-                  }}>{t}</span>
-                ))
-            }
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-
-  if (phase === 'review') return (
-    <div style={{ maxWidth: 600 }}>
-      <section style={panelStyle}>
-        <div style={eyeStyle}>Review</div>
-        {reviewSaved
-          ? <p style={{ ...muted, color: 'var(--accent)' }}>review saved. good session.</p>
-          : (
-            <>
-              <p style={{ ...muted, opacity: 0.6, marginBottom: '1rem', lineHeight: 1.6 }}>How did it go? Any notes for next time?</p>
-              <textarea
-                placeholder="what landed, what didn't, what to carry forward..."
-                value={reviewNotes} onChange={e => setReviewNotes(e.target.value)} rows={5}
-                style={{
-                  width: '100%', ...mono, background: 'transparent',
-                  border: '1px solid var(--border)', color: 'var(--text)',
-                  padding: '0.75rem 1rem', resize: 'vertical', outline: 'none',
-                  lineHeight: 1.6, marginBottom: '1rem', borderRadius: '0.5rem',
-                }}
-              />
-              <button onClick={saveReview} disabled={loading || !reviewNotes.trim()} style={btnAccent}>save review</button>
-            </>
-          )
-        }
-      </section>
-    </div>
-  );
-
-  return null;
-}
-
-// ─── View: Spaces ─────────────────────────────────────────────────────────────
-
-function SpacesView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(300px,100%),1fr))', gap: '1.25rem' }}>
-      {VOICES.map(v => (
-        <VoiceCard key={v.key} voice={v} onVoiceUsed={onVoiceUsed} />
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* ── Hero ── */}
+      <section style={panelStyle}>
+        <div style={eyeStyle}>Spaces · persistent context</div>
+        <h2 style={{
+          fontFamily: 'var(--font-serif, Georgia, serif)',
+          fontSize: 'clamp(1.75rem,3vw,3rem)',
+          lineHeight: 0.97, fontWeight: 500,
+          marginBottom: '0.75rem', color: 'var(--text)',
+        }}>
+          Where things live.
+        </h2>
+        <p style={{ color: 'var(--muted)', lineHeight: 1.75, maxWidth: '58ch', fontSize: '0.95rem' }}>
+          Spaces are scoped collaborative environments — a place where a project, a relationship,
+          or a long-running thread can live with its own context, artefacts, and recall.
+          This feature is being built.
+        </p>
+      </section>
+
+      {/* ── Spaces grid ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+        {SPACES_DATA.map(space => (
+          <article key={space.key} style={{
+            borderRadius: '1rem',
+            border: `1px solid ${space.status === 'active' ? space.accent + '55' : 'rgba(255,255,255,0.055)'}`,
+            background: space.status === 'active'
+              ? `oklch(from var(--bg) calc(l + 0.03) c h)`
+              : 'oklch(from var(--bg) calc(l + 0.015) c h)',
+            padding: '1.25rem',
+            display: 'flex', flexDirection: 'column', gap: '0.75rem',
+            opacity: space.status === 'soon' ? 0.6 : 1,
+            transition: 'opacity 200ms',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: space.accent,
+                  boxShadow: space.status === 'active' ? `0 0 8px ${space.accent}66` : 'none',
+                  flexShrink: 0,
+                }} />
+                <span style={{ ...mono, color: space.accent, textTransform: 'uppercase' as const, letterSpacing: '0.1em', fontWeight: 700 }}>
+                  {space.label}
+                </span>
+              </div>
+              <span style={{
+                ...mono, fontSize: '0.6rem',
+                color: space.status === 'active' ? space.accent : 'var(--muted)',
+                background: space.status === 'active'
+                  ? `oklch(from var(--bg) calc(l + 0.05) c h)`
+                  : 'transparent',
+                padding: '0.15rem 0.5rem', borderRadius: 999,
+                border: `1px solid ${space.status === 'active' ? space.accent + '44' : 'var(--border)'}`,
+                letterSpacing: '0.1em', textTransform: 'uppercase' as const,
+              }}>
+                {space.status === 'active' ? 'active' : 'coming soon'}
+              </span>
+            </div>
+            <p style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.65 }}>{space.desc}</p>
+            {space.status === 'active' && (
+              <div style={{ marginTop: 'auto', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <p style={{ ...muted, fontSize: '0.7rem', opacity: 0.55, lineHeight: 1.6 }}>
+                  Plex will load matching recall context and stay scoped for this session.
+                  End it cleanly and she&apos;ll propose recall tags.
+                </p>
+              </div>
+            )}
+          </article>
+        ))}
+
+        {/* Create new space card */}
+        <article style={{
+          borderRadius: '1rem',
+          border: '1px dashed rgba(255,255,255,0.1)',
+          background: 'transparent',
+          padding: '1.25rem',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: '0.5rem',
+          minHeight: 140,
+          opacity: 0.4,
+        }}>
+          <span style={{ ...mono, fontSize: '1.25rem', color: 'var(--muted)' }}>+</span>
+          <span style={{ ...mono, color: 'var(--muted)', textTransform: 'uppercase' as const, letterSpacing: '0.12em', fontSize: '0.65rem' }}>
+            Create a Space
+          </span>
+          <span style={{ ...muted, fontSize: '0.7rem', opacity: 0.6, textAlign: 'center' as const, maxWidth: '20ch' }}>
+            Define intent, set context sources, invite artefacts.
+          </span>
+          <span style={{ ...muted, fontSize: '0.65rem', opacity: 0.45, marginTop: '0.25rem' }}>not yet</span>
+        </article>
+      </div>
+
+      {/* ── Voices — merged with speak ── */}
+      <section style={panelStyle}>
+        <div style={eyeStyle}>Voices</div>
+        <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.65, marginBottom: '1.25rem', maxWidth: '60ch' }}>
+          Speak directly with any voice. Each has their own recall context and tone.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+          {VOICES.map(v => (
+            <VoiceCard key={v.key} voice={v} onVoiceUsed={() => {}} />
+          ))}
+        </div>
+      </section>
+
     </div>
   );
 }
 
-// ─── Root Shell ───────────────────────────────────────────────────────────────
+// ─── Root ────────────────────────────────────────────────────────────────────
 
-export default function OnePage() {
+export default function PlexSable() {
   const [view, setView] = useState<View>('one');
   const [phase, setPhase] = useState<SessionPhase>('start');
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [lastVoice, setLastVoice] = useState<VoiceChannel | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
 
-  function handleVoiceUsed(v: VoiceChannel) {
-    setLastVoice(v);
-    if (v === 'plex' && phase !== 'active') {
-      setPhase('active');
-      setStartedAt(prev => prev ?? Date.now());
-    }
-  }
+  useEffect(() => {
+    fetch('/api/one').then(r => r.json()).then(d => {
+      setPendingCount((d.requests ?? []).filter((r: any) => r.status === 'pending').length);
+    }).catch(() => {});
+  }, [view]);
 
-  const navItems: { key: View; label: string; glyph: string }[] = [
-    { key: 'one',     label: 'one',     glyph: '◐' },
-    { key: 'session', label: 'session', glyph: '⋯' },
-    { key: 'spaces',  label: 'spaces',  glyph: '◫' },
+  const navItems: { key: View; label: string }[] = [
+    { key: 'one', label: '◐ one' },
+    { key: 'session', label: '⋯ session' },
+    { key: 'spaces', label: '◫ spaces' },
   ];
 
   return (
-    <div style={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--text)' }}>
+    <div style={{ minHeight: '100dvh', background: 'var(--bg)', color: 'var(--text)', display: 'flex', flexDirection: 'column' }}>
       <SessionStrip phase={phase} startedAt={startedAt} lastVoice={lastVoice} pendingCount={pendingCount} />
 
-      {/* Nav */}
       <nav style={{
-        display: 'flex', gap: '0', alignItems: 'center',
-        padding: '0 1.25rem',
+        display: 'flex', gap: '0.25rem', padding: '0.6rem 1.5rem',
         borderBottom: '1px solid var(--border)',
         background: 'oklch(from var(--bg) calc(l - 0.005) c h)',
       }}>
         {navItems.map(item => (
-          <button
-            key={item.key}
-            onClick={() => setView(item.key)}
+          <button key={item.key} onClick={() => setView(item.key)}
             style={{
-              ...mono, padding: '0.75rem 1.1rem',
-              background: 'none', border: 'none',
-              borderBottom: view === item.key ? '1px solid var(--accent)' : '1px solid transparent',
+              ...mono, padding: '0.35rem 0.85rem', borderRadius: '999px',
+              background: view === item.key ? 'oklch(from var(--accent) l c h / 0.12)' : 'transparent',
               color: view === item.key ? 'var(--accent)' : 'var(--muted)',
-              cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem',
-              opacity: view === item.key ? 1 : 0.45,
-              transition: 'all 140ms', marginBottom: '-1px',
-            }}
-          >
-            <span style={{ opacity: 0.6 }}>{item.glyph}</span>
+              border: view === item.key ? '1px solid oklch(from var(--accent) l c h / 0.3)' : '1px solid transparent',
+              cursor: 'pointer', transition: 'all 140ms',
+            }}>
             {item.label}
+            {item.key === 'one' && pendingCount > 0 && (
+              <span style={{ marginLeft: '0.4rem', background: 'var(--accent)', color: 'var(--bg)', borderRadius: 999, fontSize: '0.55rem', padding: '0.05rem 0.35rem', fontWeight: 700 }}>
+                {pendingCount}
+              </span>
+            )}
           </button>
         ))}
       </nav>
 
-      {/* Content */}
-      <main style={{
-        flex: 1, padding: 'clamp(1.5rem,4vw,3rem) clamp(1rem,3vw,2.5rem)',
-        maxWidth: 1400, width: '100%', margin: '0 auto',
-      }}>
+      <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
         {view === 'one'     && <OneView />}
-        {view === 'session' && <SessionView onVoiceUsed={handleVoiceUsed} />}
-        {view === 'spaces'  && <SpacesView onVoiceUsed={handleVoiceUsed} />}
+        {view === 'session' && <SessionView />}
+        {view === 'spaces'  && <SpacesView />}
       </main>
 
       <Footer />
