@@ -3,6 +3,7 @@
 // Views: ◐ one | ⋯ session | ◫ spaces
 // Nav removed. Footer kept. Session strip live across all views.
 // Visual update Aug 2 2026 — balanced two-column ONE layout, spaces scaffold
+// Spaces update Aug 2 2026 — full preview layout, voices+speak merged
 
 'use client';
 
@@ -169,7 +170,157 @@ function SessionStrip({
   );
 }
 
-// ─── Voice Panel ──────────────────────────────────────────────────────────────
+// ─── Voice Panel (spaces card variant) ───────────────────────────────────────
+
+function VoiceCard({
+  voice, onVoiceUsed,
+}: {
+  voice: typeof VOICES[number];
+  onVoiceUsed: (v: VoiceChannel) => void;
+}) {
+  const [input, setInput] = useState('');
+  const [history, setHistory] = useState<VoiceMsg[]>([]);
+  const [loading, setLoading] = useState(false);
+  const histRef = useRef<HTMLDivElement>(null);
+  const color = VOICE_COLORS[voice.key];
+  const shortcut = VOICE_SHORTCUTS[voice.key];
+
+  useEffect(() => {
+    if (histRef.current) histRef.current.scrollTop = histRef.current.scrollHeight;
+  }, [history]);
+
+  useEffect(() => {
+    const [mod, key] = shortcut.split('+');
+    const handler = (e: KeyboardEvent) => {
+      if (mod === 'Alt' && e.altKey && e.key.toLowerCase() === key.toLowerCase())
+        document.getElementById(`vc-${voice.key}`)?.focus();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [voice.key, shortcut]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput('');
+    setLoading(true);
+    setHistory(h => [...h, { role: 'user', content: text, ts: Date.now() }]);
+    try {
+      const res = await fetch(`/api/speak?voice=${voice.key}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text }),
+      });
+      const data = await res.json();
+      setHistory(h => [...h, {
+        role: 'assistant',
+        content: data.reply ?? data.response ?? data.message ?? '(no response)',
+        ts: Date.now(),
+      }]);
+      onVoiceUsed(voice.key);
+    } catch {
+      setHistory(h => [...h, { role: 'assistant', content: '(unavailable)', ts: Date.now() }]);
+    }
+    setLoading(false);
+  }, [input, loading, voice.key, onVoiceUsed]);
+
+  return (
+    <article style={{
+      display: 'flex', flexDirection: 'column', gap: '0.6rem',
+      padding: '1.1rem',
+      borderRadius: '1rem',
+      border: `1px solid rgba(255,255,255,0.055)`,
+      background: 'oklch(from var(--bg) calc(l + 0.025) c h)',
+      minHeight: 260,
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span style={{
+          width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0,
+          boxShadow: `0 0 8px ${color}55`,
+        }} />
+        <span style={{ ...mono, color, textTransform: 'uppercase' as const, letterSpacing: '0.1em', fontWeight: 700 }}>{voice.label}</span>
+        <span style={{ ...muted, opacity: 0.4, fontSize: '0.65rem', marginLeft: '0.15rem' }}>{voice.desc}</span>
+        <span style={{
+          marginLeft: 'auto', ...mono, fontSize: '0.6rem', color: 'var(--muted)', opacity: 0.35,
+          background: 'oklch(from var(--bg) calc(l + 0.04) c h)',
+          padding: '0.1rem 0.4rem', borderRadius: 3,
+        }}>{shortcut}</span>
+      </div>
+
+      {/* Chat history */}
+      <div ref={histRef} style={{
+        flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column',
+        gap: '0.45rem', paddingRight: '0.15rem',
+      }}>
+        {history.length === 0
+          ? (
+            <div style={{
+              borderLeft: `2px solid ${color}`,
+              paddingLeft: '0.65rem',
+              marginTop: '0.25rem',
+            }}>
+              <span style={{ ...muted, opacity: 0.4, fontStyle: 'italic', fontSize: '0.82rem', lineHeight: 1.6 }}>{voice.bubble}</span>
+            </div>
+          )
+          : history.map(m => (
+            <div key={m.ts} style={{ display: 'flex', flexDirection: 'column',
+              alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', gap: '0.12rem' }}>
+              <span style={{ ...mono, fontSize: '0.55rem', color: 'var(--muted)', opacity: 0.45, letterSpacing: '0.08em' }}>
+                {m.role === 'user' ? 'joe' : voice.label.toLowerCase()}
+              </span>
+              <span style={{
+                background: m.role === 'user'
+                  ? 'oklch(from var(--bg) calc(l + 0.05) c h)'
+                  : 'oklch(from var(--bg) calc(l + 0.02) c h)',
+                borderLeft: m.role === 'assistant' ? `2px solid ${color}` : 'none',
+                padding: '0.3rem 0.55rem', fontSize: '0.8rem',
+                color: 'var(--text)', lineHeight: 1.6, maxWidth: '92%',
+                borderRadius: '0.4rem',
+              }}>{m.content}</span>
+            </div>
+          ))
+        }
+        {loading && <span style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em', fontSize: '0.85rem' }}>…</span>}
+      </div>
+
+      {/* Input */}
+      <div style={{ display: 'flex', gap: '0.35rem', marginTop: 'auto' }}>
+        <input
+          id={`vc-${voice.key}`}
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
+          placeholder={`message ${voice.label}…`}
+          disabled={loading}
+          style={{
+            flex: 1, ...mono, background: 'transparent',
+            border: '1px solid var(--border)', color: 'var(--text)',
+            padding: '0.3rem 0.55rem', outline: 'none',
+            transition: 'border-color 120ms', borderRadius: '0.4rem',
+            fontSize: '0.72rem',
+          }}
+          onFocus={e => (e.target.style.borderColor = color)}
+          onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+        />
+        <button
+          onClick={send}
+          disabled={loading || !input.trim()}
+          style={{
+            ...mono, padding: '0.3rem 0.6rem',
+            background: input.trim() ? color : 'transparent',
+            color: input.trim() ? 'var(--bg)' : 'var(--muted)',
+            border: '1px solid var(--border)',
+            cursor: 'pointer', opacity: loading ? 0.4 : 1,
+            transition: 'all 120ms', borderRadius: '0.4rem',
+          }}
+        >↑</button>
+      </div>
+    </article>
+  );
+}
+
+// ─── Voice Panel (ONE view variant) ──────────────────────────────────────────
 
 function VoicePanel({
   voice, onVoiceUsed, fullWidth = false,
@@ -1076,7 +1227,7 @@ function OneView() {
             )}
           </section>
 
-          {/* Voices (interactive) */}
+          {/* Speak — ONE view */}
           <section style={panelStyle}>
             <div style={eyeStyle}>Speak</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -1271,18 +1422,149 @@ function SessionView() {
   );
 }
 
-// ─── View: Spaces ────────────────────────────────────────────────────────────
+// ─── View: Spaces ─────────────────────────────────────────────────────────────
+
+const SPACES_DATA = [
+  {
+    key: 'plex-sable',
+    label: 'Plex-Sable',
+    desc: 'The primary development space for Plex-Sable itself. Code, sessions, deploy logs, design decisions.',
+    status: 'active' as const,
+    accent: '#f0a060',
+  },
+  {
+    key: 'deep-work',
+    label: 'Deep Work',
+    desc: 'Deep work and long thought. The space where Plex reasons through large questions over time.',
+    status: 'soon' as const,
+    accent: '#c084fc',
+  },
+  {
+    key: 'manitec',
+    label: 'Manitec HQ',
+    desc: 'Organizational memory, active projects, team context. The empire\'s shared space.',
+    status: 'soon' as const,
+    accent: '#67e8f9',
+  },
+];
 
 function SpacesView() {
+  const panelStyle: React.CSSProperties = {
+    borderRadius: '1rem',
+    border: '1px solid rgba(255,255,255,0.055)',
+    background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
+    padding: '1.5rem',
+    position: 'relative' as const,
+    overflow: 'hidden',
+  };
+
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', paddingTop: '2rem' }}>
-      <div style={eyeStyle}>Spaces — scaffold</div>
-      <h2 style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontSize: 'clamp(1.5rem,3vw,2.5rem)', fontWeight: 400, color: 'var(--text)', marginBottom: '1rem', lineHeight: 1.15 }}>
-        Where things live.
-      </h2>
-      <p style={{ color: 'var(--muted)', lineHeight: 1.75, maxWidth: '52ch' }}>
-        Spaces is where persistent contexts will live — projects, conversations, shared memory zones, and collaboration surfaces. Coming soon.
-      </p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+
+      {/* ── Hero ── */}
+      <section style={panelStyle}>
+        <div style={eyeStyle}>Spaces · persistent context</div>
+        <h2 style={{
+          fontFamily: 'var(--font-serif, Georgia, serif)',
+          fontSize: 'clamp(1.75rem,3vw,3rem)',
+          lineHeight: 0.97, fontWeight: 500,
+          marginBottom: '0.75rem', color: 'var(--text)',
+        }}>
+          Where things live.
+        </h2>
+        <p style={{ color: 'var(--muted)', lineHeight: 1.75, maxWidth: '58ch', fontSize: '0.95rem' }}>
+          Spaces are scoped collaborative environments — a place where a project, a relationship,
+          or a long-running thread can live with its own context, artefacts, and recall.
+          This feature is being built.
+        </p>
+      </section>
+
+      {/* ── Spaces grid ── */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '1rem' }}>
+        {SPACES_DATA.map(space => (
+          <article key={space.key} style={{
+            borderRadius: '1rem',
+            border: `1px solid ${space.status === 'active' ? space.accent + '55' : 'rgba(255,255,255,0.055)'}`,
+            background: space.status === 'active'
+              ? `oklch(from var(--bg) calc(l + 0.03) c h)`
+              : 'oklch(from var(--bg) calc(l + 0.015) c h)',
+            padding: '1.25rem',
+            display: 'flex', flexDirection: 'column', gap: '0.75rem',
+            opacity: space.status === 'soon' ? 0.6 : 1,
+            transition: 'opacity 200ms',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{
+                  width: 7, height: 7, borderRadius: '50%',
+                  background: space.accent,
+                  boxShadow: space.status === 'active' ? `0 0 8px ${space.accent}66` : 'none',
+                  flexShrink: 0,
+                }} />
+                <span style={{ ...mono, color: space.accent, textTransform: 'uppercase' as const, letterSpacing: '0.1em', fontWeight: 700 }}>
+                  {space.label}
+                </span>
+              </div>
+              <span style={{
+                ...mono, fontSize: '0.6rem',
+                color: space.status === 'active' ? space.accent : 'var(--muted)',
+                background: space.status === 'active'
+                  ? `oklch(from var(--bg) calc(l + 0.05) c h)`
+                  : 'transparent',
+                padding: '0.15rem 0.5rem', borderRadius: 999,
+                border: `1px solid ${space.status === 'active' ? space.accent + '44' : 'var(--border)'}`,
+                letterSpacing: '0.1em', textTransform: 'uppercase' as const,
+              }}>
+                {space.status === 'active' ? 'active' : 'coming soon'}
+              </span>
+            </div>
+            <p style={{ color: 'var(--muted)', fontSize: '0.85rem', lineHeight: 1.65 }}>{space.desc}</p>
+            {space.status === 'active' && (
+              <div style={{ marginTop: 'auto', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <p style={{ ...muted, fontSize: '0.7rem', opacity: 0.55, lineHeight: 1.6 }}>
+                  Plex will load matching recall context and stay scoped for this session.
+                  End it cleanly and she&apos;ll propose recall tags.
+                </p>
+              </div>
+            )}
+          </article>
+        ))}
+
+        {/* Create new space card */}
+        <article style={{
+          borderRadius: '1rem',
+          border: '1px dashed rgba(255,255,255,0.1)',
+          background: 'transparent',
+          padding: '1.25rem',
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          justifyContent: 'center', gap: '0.5rem',
+          minHeight: 140,
+          opacity: 0.4,
+        }}>
+          <span style={{ ...mono, fontSize: '1.25rem', color: 'var(--muted)' }}>+</span>
+          <span style={{ ...mono, color: 'var(--muted)', textTransform: 'uppercase' as const, letterSpacing: '0.12em', fontSize: '0.65rem' }}>
+            Create a Space
+          </span>
+          <span style={{ ...muted, fontSize: '0.7rem', opacity: 0.6, textAlign: 'center' as const, maxWidth: '20ch' }}>
+            Define intent, set context sources, invite artefacts.
+          </span>
+          <span style={{ ...muted, fontSize: '0.65rem', opacity: 0.45, marginTop: '0.25rem' }}>not yet</span>
+        </article>
+      </div>
+
+      {/* ── Voices — merged with speak ── */}
+      <section style={panelStyle}>
+        <div style={eyeStyle}>Voices</div>
+        <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.65, marginBottom: '1.25rem', maxWidth: '60ch' }}>
+          Speak directly with any voice. Each has their own recall context and tone.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1rem' }}>
+          {VOICES.map(v => (
+            <VoiceCard key={v.key} voice={v} onVoiceUsed={() => {}} />
+          ))}
+        </div>
+      </section>
+
     </div>
   );
 }
