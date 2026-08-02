@@ -37,6 +37,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ sleep });
   }
 
+  if (section === 'log') {
+    const log = await safeGet(async () => {
+      const snap = await db.collection('one_log').orderBy('timestamp', 'desc').limit(40).get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }, []);
+    return NextResponse.json({ log });
+  }
+
   const [sediment, autonomy, requests, log, voices] = await Promise.all([
     safeGet(async () => {
       const snap = await db.doc('plex_sediment/current').get();
@@ -141,8 +149,6 @@ export async function POST(req: NextRequest) {
           'Content-Type': 'application/json',
           ...(cronSecret ? { Authorization: `Bearer ${cronSecret}` } : {}),
         },
-        // source:'manual' ensures willDream() applies manual rules:
-        // dreamless → never, nightmare → 21-32%, dream → always
         body: JSON.stringify({ mode, source: 'manual' }),
       });
 
