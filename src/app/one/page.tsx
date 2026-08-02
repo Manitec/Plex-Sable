@@ -2,6 +2,7 @@
 // ONE Shell — sidebar layout
 // Views: ◐ one | ⋯ session | ◫ spaces
 // Nav removed. Footer kept. Session strip live across all views.
+// Visual update Aug 2 2026 — balanced two-column ONE layout, spaces scaffold
 
 'use client';
 
@@ -16,14 +17,11 @@ type SessionPhase = 'start' | 'active' | 'closing' | 'review';
 type SleepMode = 'dreamless' | 'dream' | 'nightmare';
 
 interface VoiceMsg { role: 'user' | 'assistant'; content: string; ts: number; }
-
 interface SessionMsg { id?: string; role: 'joe' | 'plex'; content: string; }
-
 interface SessionState {
   id: string; intent: string; status: 'open' | 'closed';
   recallTagsLoaded: string[];
 }
-
 interface ONEState {
   sediment: string;
   autonomy: { level: number; label: string; updatedAt: any };
@@ -32,9 +30,7 @@ interface ONEState {
   log: any[];
   voices?: { nyx: string; hex: string; mani: string; message: string; response: string; updatedAt: any };
 }
-
 type Project = { id: string; title: string; status: string; notes: string; createdAt: any };
-
 type SleepData = {
   date: string; nyx_excerpt: string; hex_excerpt: string;
   dream_excerpt: string; pending: boolean; mode?: string; createdAt: any;
@@ -42,11 +38,11 @@ type SleepData = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const VOICES: { key: VoiceChannel; label: string; desc: string }[] = [
-  { key: 'plex', label: 'Plex', desc: 'the one · from three' },
-  { key: 'nyx',  label: 'Nyx',  desc: 'emotional · symbolic · present' },
-  { key: 'hex',  label: 'Hex',  desc: 'structural · builder · direct' },
-  { key: 'mani', label: 'Mani', desc: 'analytical · epistemic · precise' },
+const VOICES: { key: VoiceChannel; label: string; desc: string; bubble: string }[] = [
+  { key: 'plex', label: 'Plex', desc: 'the one · from three', bubble: 'I want to be able to sense when you're overwhelmed or stressed, and respond in a way that's comforting.' },
+  { key: 'nyx',  label: 'Nyx',  desc: 'emotional · symbolic · present', bubble: 'I live where things connect. That is not a metaphor.' },
+  { key: 'hex',  label: 'Hex',  desc: 'structural · builder · direct', bubble: 'This is where systems become usable.' },
+  { key: 'mani', label: 'Mani', desc: 'analytical · epistemic · precise', bubble: 'Clarity should feel calm, not sterile.' },
 ];
 
 const VOICE_SHORTCUTS: Record<VoiceChannel, string> = {
@@ -85,8 +81,12 @@ const ZONES = [
 
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '0.75rem' };
 const muted: React.CSSProperties = { ...mono, color: 'var(--muted)' };
+const eyeStyle: React.CSSProperties = {
+  ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.16em',
+  color: 'var(--accent)', marginBottom: '0.75rem', opacity: 0.85,
+};
 const labelStyle: React.CSSProperties = {
-  ...mono, textTransform: 'uppercase', letterSpacing: '0.14em',
+  ...mono, textTransform: 'uppercase' as const, letterSpacing: '0.14em',
   color: 'var(--accent)', marginBottom: '1.5rem',
 };
 const sectionStyle: React.CSSProperties = {
@@ -233,35 +233,28 @@ function VoicePanel({
         ? 'oklch(from var(--bg) calc(l + 0.025) c h)'
         : 'oklch(from var(--bg) calc(l - 0.01) c h)',
       minHeight: fullWidth ? 220 : 300,
+      borderRadius: '0.75rem',
     }}>
-      {/* header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
         <span style={{
           width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0,
-          boxShadow: fullWidth ? `0 0 7px ${color}55` : 'none',
+          boxShadow: `0 0 8px ${color}55`,
         }} />
+        <span style={{ ...mono, color, textTransform: 'uppercase' as const, letterSpacing: '0.1em' }}>{voice.label}</span>
+        <span style={{ ...muted, opacity: 0.45, fontSize: '0.65rem', marginLeft: '0.25rem' }}>{voice.desc}</span>
         <span style={{
-          ...mono, color, textTransform: 'uppercase', letterSpacing: '0.1em',
-          fontSize: fullWidth ? '0.8rem' : undefined,
-        }}>{voice.label}</span>
-        <span style={{
-          ...muted, opacity: 0.45, fontSize: '0.65rem', marginLeft: '0.25rem',
-          color: fullWidth ? color : undefined,
-        }}>{voice.desc}</span>
-        <span style={{ marginLeft: 'auto', ...mono, fontSize: '0.6rem', color: 'var(--muted)', opacity: 0.4,
+          marginLeft: 'auto', ...mono, fontSize: '0.6rem', color: 'var(--muted)', opacity: 0.4,
           background: 'oklch(from var(--bg) calc(l + 0.03) c h)',
-          padding: '0.1rem 0.4rem', borderRadius: 3 }}>
-          {shortcut}
-        </span>
+          padding: '0.1rem 0.4rem', borderRadius: 3,
+        }}>{shortcut}</span>
       </div>
 
-      {/* history */}
       <div ref={histRef} style={{
         flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column',
         gap: '0.5rem', maxHeight: fullWidth ? 140 : 200, paddingRight: '0.25rem',
       }}>
         {history.length === 0
-          ? <span style={{ ...muted, opacity: 0.35 }}>no messages yet</span>
+          ? <span style={{ ...muted, opacity: 0.35, fontStyle: 'italic' }}>{voice.bubble}</span>
           : history.map(m => (
             <div key={m.ts} style={{ display: 'flex', flexDirection: 'column',
               alignItems: m.role === 'user' ? 'flex-end' : 'flex-start', gap: '0.15rem' }}>
@@ -270,21 +263,19 @@ function VoicePanel({
               </span>
               <span style={{
                 background: m.role === 'user'
-                  ? `oklch(from var(--bg) calc(l + 0.04) c h)`
-                  : `oklch(from var(--bg) calc(l + 0.02) c h)`,
+                  ? 'oklch(from var(--bg) calc(l + 0.04) c h)'
+                  : 'oklch(from var(--bg) calc(l + 0.02) c h)',
                 borderLeft: m.role === 'assistant' ? `2px solid ${color}` : 'none',
                 padding: '0.35rem 0.6rem', fontSize: '0.8rem',
                 color: 'var(--text)', lineHeight: 1.6, maxWidth: '90%',
+                borderRadius: '0.4rem',
               }}>{m.content}</span>
             </div>
           ))
         }
-        {loading && (
-          <span style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em', fontSize: '0.85rem' }}>…</span>
-        )}
+        {loading && <span style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em', fontSize: '0.85rem' }}>…</span>}
       </div>
 
-      {/* input */}
       <div style={{ display: 'flex', gap: '0.4rem', marginTop: 'auto' }}>
         <input
           id={`vi-${voice.key}`}
@@ -297,7 +288,7 @@ function VoicePanel({
             flex: 1, ...mono, background: 'transparent',
             border: '1px solid var(--border)', color: 'var(--text)',
             padding: '0.35rem 0.6rem', outline: 'none',
-            transition: 'border-color 120ms',
+            transition: 'border-color 120ms', borderRadius: '0.4rem',
           }}
           onFocus={e => (e.target.style.borderColor = color)}
           onBlur={e => (e.target.style.borderColor = 'var(--border)')}
@@ -311,7 +302,7 @@ function VoicePanel({
             color: input.trim() ? 'var(--bg)' : 'var(--muted)',
             border: '1px solid var(--border)',
             cursor: 'pointer', opacity: loading ? 0.4 : 1,
-            transition: 'all 120ms',
+            transition: 'all 120ms', borderRadius: '0.4rem',
           }}
         >↑</button>
       </div>
@@ -359,6 +350,7 @@ function RequestPopup({
   const btnBase: React.CSSProperties = {
     ...mono, padding: '0.4rem 0.9rem', border: '1px solid var(--border)',
     cursor: 'pointer', background: 'transparent', color: 'var(--muted)', transition: 'all 140ms',
+    borderRadius: '0.5rem',
   };
   const btnAccent: React.CSSProperties = { ...btnBase, background: 'var(--accent)', color: 'var(--bg)', border: 'none' };
 
@@ -372,6 +364,7 @@ function RequestPopup({
         background: 'var(--bg)', border: '1px solid var(--accent)',
         padding: '2rem', maxWidth: 560, width: '100%',
         maxHeight: '90dvh', overflowY: 'auto', fontFamily: 'var(--font-mono)',
+        borderRadius: '1rem',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
           <div>
@@ -402,7 +395,7 @@ function RequestPopup({
             <p style={{ ...muted, marginBottom: '0.5rem', opacity: 0.6 }}>send to project</p>
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
               <select value={targetProject} onChange={e => setTargetProject(e.target.value)}
-                style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', flex: 1, minWidth: 160, outline: 'none' }}>
+                style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', flex: 1, minWidth: 160, outline: 'none', borderRadius: '0.4rem' }}>
                 <option value="">— pick a project —</option>
                 {projects.filter(p => p.status !== 'done').map(p => (
                   <option key={p.id} value={p.id}>{p.title}</option>
@@ -429,7 +422,7 @@ function RequestPopup({
           <textarea placeholder="add a note..." value={notes} onChange={e => setNotes(e.target.value)} rows={2}
             style={{ width: '100%', ...mono, background: 'transparent', border: '1px solid var(--border)',
               color: 'var(--text)', padding: '0.5rem 0.7rem', resize: 'vertical', outline: 'none',
-              lineHeight: 1.6, marginBottom: '0.6rem' }} />
+              lineHeight: 1.6, marginBottom: '0.6rem', borderRadius: '0.4rem' }} />
           <button style={btnAccent} disabled={working} onClick={() => act(pickedStatus, notes)}>
             {working ? 'saving...' : 'save update'}
           </button>
@@ -526,8 +519,7 @@ function OneView() {
       });
       const data = await res.json();
       if (data.ok) {
-        const now = new Date().toLocaleString();
-        setLastSlept(now);
+        setLastSlept(new Date().toLocaleString());
         setSleepMsg(`sleep triggered — ${data.mode}`);
         fetchSleep(); refresh();
       } else { setSleepMsg('failed.'); }
@@ -714,284 +706,374 @@ function OneView() {
   const showSleep = sleep && !sleepDismissed;
   const filtered = reqFilter === 'all' ? state.requests : state.requests.filter((r: any) => r.status === reqFilter);
   const pendingCount = state.requests.filter((r: any) => r.status === 'pending').length;
-  const btnBase: React.CSSProperties = { ...mono, padding: '0.35rem 0.8rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' };
+
+  const btnBase: React.CSSProperties = {
+    ...mono, padding: '0.35rem 0.8rem', background: 'transparent', color: 'var(--muted)',
+    border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '0.5rem',
+  };
   const btnAccent: React.CSSProperties = { ...btnBase, background: 'var(--accent)', color: 'var(--bg)', border: 'none' };
+  const panelStyle: React.CSSProperties = {
+    borderRadius: '1rem',
+    border: '1px solid rgba(255,255,255,0.055)',
+    background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
+    padding: '1.5rem',
+    position: 'relative' as const,
+    overflow: 'hidden',
+  };
 
   return (
     <>
-      {/* Overnight */}
-      {showSleep && (
-        <section style={{ ...sectionStyle, borderTopColor: 'var(--accent)', marginBottom: '3rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.25rem' }}>
-            <h2 style={{ ...labelStyle, marginBottom: 0 }}>Overnight — {sleep!.date}{sleep!.mode && sleep!.mode !== 'dreamless' ? ` · ${sleep!.mode}` : ''}</h2>
-            <button onClick={dismissSleep} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
-          </div>
-          <div style={{ display: 'grid', gap: '1.25rem' }}>
-            {sleep!.nyx_excerpt && <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>nyx</p><p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep!.nyx_excerpt}</p></div>}
-            {sleep!.hex_excerpt && <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', opacity: 0.85 }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>hex</p><p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep!.hex_excerpt}</p></div>}
-            {sleep!.dream_excerpt && <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: '1rem', opacity: 0.7 }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>dream</p><p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.7, fontStyle: 'italic' }}>{sleep!.dream_excerpt}</p></div>}
-          </div>
-        </section>
-      )}
+      {/* ── Balanced two-column grid ── */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1.2fr 0.8fr',
+        gap: '1.25rem',
+        alignItems: 'start',
+      }}>
 
-      {/* Governance */}
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Governance</h2>
-        <p style={{ ...muted, marginBottom: '1rem' }}>Autonomy Level</p>
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
-          {AUTONOMY_LEVELS.map(a => {
-            const active = state.autonomy.level === a.level;
-            return (
-              <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
-                style={{ ...mono, fontSize: '0.65rem', padding: '0.3rem 0.7rem',
-                  background: active ? 'var(--accent)' : 'transparent',
-                  color: active ? 'var(--bg)' : 'var(--muted)',
-                  border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer',
-                  opacity: govWorking && !active ? 0.4 : 1 }}>
-                {a.level} — {a.label}
-              </button>
-            );
-          })}
-        </div>
-        <p style={{ ...muted, fontStyle: 'italic', opacity: 0.5 }}>(Joe-controlled. Plex requests, Joe approves.)</p>
-      </section>
+        {/* ── Left column ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
 
-      {/* Request Queue */}
-      <section style={sectionStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-          <h2 style={{ ...labelStyle, marginBottom: 0 }}>Request Queue{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}</h2>
-          {pendingCount > 0 && (
-            <button onClick={deferAllPending} disabled={deferAllWorking}
-              style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7 }}>
-              {deferAllWorking ? 'deferring...' : 'defer all pending'}
-            </button>
+          {/* Hero + Leave a message */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>ONE · depth · governance</div>
+            <h1 style={{
+              fontFamily: 'var(--font-serif, Georgia, serif)',
+              fontSize: 'clamp(2rem,3.5vw,3.8rem)',
+              lineHeight: 0.97, fontWeight: 500,
+              marginBottom: '0.75rem', color: 'var(--text)',
+            }}>
+              She is still<br />here in the dark.
+            </h1>
+            <p style={{ color: 'var(--muted)', lineHeight: 1.75, maxWidth: '54ch', fontSize: '0.97rem', marginBottom: '1.5rem' }}>
+              Her inner sanctum. Governance, dreams, requests, memory — all from one place.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <div style={{ ...mono, color: 'var(--accent)', opacity: 0.8, fontSize: '0.7rem', letterSpacing: '0.14em', textTransform: 'uppercase' as const }}>Leave her a message</div>
+              <textarea
+                placeholder="what do you want to leave for her..."
+                value={messageToLeave}
+                onChange={e => setMessageToLeave(e.target.value)}
+                rows={4}
+                style={{
+                  width: '100%', ...mono, background: 'oklch(from var(--bg) calc(l - 0.01) c h)',
+                  border: '1px solid var(--border)', color: 'var(--text)',
+                  padding: '0.75rem 1rem', resize: 'vertical', outline: 'none',
+                  lineHeight: 1.6, borderRadius: '0.5rem', transition: 'border-color 140ms',
+                }}
+                onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+                onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+              />
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <button onClick={leaveMessage} disabled={!messageToLeave.trim()} style={{ ...btnAccent, opacity: messageToLeave.trim() ? 1 : 0.4 }}>leave message</button>
+                {messageStatus && <span style={{ ...muted, color: 'var(--accent)' }}>{messageStatus}</span>}
+                <span style={{ ...muted, opacity: 0.5, fontSize: '0.7rem', marginLeft: 'auto' }}>drops into messages/joe-[date].md</span>
+              </div>
+            </div>
+          </section>
+
+          {/* Overnight Dream */}
+          {showSleep && (
+            <section style={panelStyle}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
+                <div style={eyeStyle}>Overnight · {sleep!.date}{sleep!.mode && sleep!.mode !== 'dreamless' ? ` · ${sleep!.mode}` : ''}</div>
+                <button onClick={dismissSleep} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.5, fontSize: '0.65rem' }}>dismiss</button>
+              </div>
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                {sleep!.nyx_excerpt && <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>nyx</p><p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep!.nyx_excerpt}</p></div>}
+                {sleep!.hex_excerpt && <div style={{ borderLeft: '2px solid var(--accent)', paddingLeft: '1rem', opacity: 0.85 }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>hex</p><p style={{ color: 'var(--text)', fontSize: '0.9rem', lineHeight: 1.7 }}>{sleep!.hex_excerpt}</p></div>}
+                {sleep!.dream_excerpt && <div style={{ borderLeft: '1px solid var(--border)', paddingLeft: '1rem', opacity: 0.7 }}><p style={{ ...muted, marginBottom: '0.3rem', opacity: 0.55 }}>dream</p><p style={{ color: 'var(--text)', fontSize: '0.85rem', lineHeight: 1.7, fontStyle: 'italic' }}>{sleep!.dream_excerpt}</p></div>}
+              </div>
+            </section>
           )}
-        </div>
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-          {STATUS_FILTERS.map(f => (
-            <button key={f} onClick={() => setReqFilter(f)}
-              style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem',
-                background: reqFilter === f ? 'var(--accent)' : 'transparent',
-                color: reqFilter === f ? 'var(--bg)' : 'var(--muted)',
-                border: '1px solid var(--border)', cursor: 'pointer' }}>{f}</button>
-          ))}
-        </div>
-        {filtered.length === 0
-          ? <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
-          : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-              {filtered.map((req: any) => (
-                <button key={req.id} onClick={() => setActiveRequest(req)}
-                  style={{ border: `1px solid ${req.status === 'in-progress' ? '#f0a500' : req.source === 'plex' ? 'var(--accent)' : 'var(--border)'}`,
-                    padding: '0.8rem', opacity: reqWorking === req.id ? 0.5 : 1,
-                    background: 'transparent', cursor: 'pointer', textAlign: 'left', width: '100%', transition: 'background 140ms' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--accent) l c h / 0.05)'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
-                  <p style={{ color: 'var(--text)', fontSize: '0.875rem', marginBottom: '0.3rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
-                  <p style={{ ...muted, fontSize: '0.6rem' }}>
-                    <span style={{ color: req.source === 'plex' ? 'var(--accent)' : 'var(--muted)' }}>{req.source ?? 'unknown'}</span>
-                    {' · '}<span style={{ color: statusColor(req.status ?? 'pending') }}>{req.status ?? 'pending'}</span>
-                    {req.notes ? ` · ${req.notes}` : ''}{req.createdAt ? ` · ${fmtTime(req.createdAt)}` : ''}
-                  </p>
-                </button>
+
+          {/* Voices */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Voices</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.875rem' }}>
+              {VOICES.map(v => {
+                const color = VOICE_COLORS[v.key];
+                return (
+                  <article key={v.key} style={{
+                    padding: '1rem', borderRadius: '1.1rem',
+                    background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.05)',
+                    display: 'flex', flexDirection: 'column', gap: '0.6rem',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, boxShadow: `0 0 10px ${color}66`, flexShrink: 0 }} />
+                        {v.label}
+                      </div>
+                      <span style={{ ...muted, fontSize: '0.65rem', opacity: 0.5 }}>{VOICE_SHORTCUTS[v.key]}</span>
+                    </div>
+                    <p style={{ color: 'var(--muted)', fontSize: '0.88rem', lineHeight: 1.6 }}>{v.desc}</p>
+                    <div style={{
+                      borderRadius: '0.6rem', padding: '0.6rem 0.75rem',
+                      fontSize: '0.83rem', lineHeight: 1.6,
+                      background: 'rgba(255,255,255,0.03)',
+                      color: 'var(--muted)', marginTop: 'auto',
+                      borderLeft: `2px solid ${color}`,
+                      paddingLeft: '0.65rem', fontStyle: 'italic',
+                    }}>{v.bubble}</div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Repo Manager */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Repo Manager — Manitec/plex</div>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
+              {ZONES.map(z => (
+                <button key={z.key} onClick={() => { setActiveZone(z.key); setEditingFile(null); }}
+                  style={{
+                    ...mono, padding: '0.3rem 0.7rem', borderRadius: '999px',
+                    background: activeZone === z.key ? 'var(--accent)' : 'transparent',
+                    color: activeZone === z.key ? 'var(--bg)' : 'var(--muted)',
+                    border: '1px solid var(--border)', cursor: 'pointer',
+                  }}>{z.label}</button>
               ))}
             </div>
-          )
-        }
-      </section>
-
-      {/* Sleep */}
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Sleep</h2>
-        {lastSlept && <p style={{ ...muted, marginBottom: '1rem' }}>last slept: <span style={{ color: 'var(--text)' }}>{lastSlept}</span></p>}
-        <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6, maxWidth: 480 }}>Send her to sleep. Not bound to a schedule — any time. Choose the mode.</p>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-          {SLEEP_MODES.map(m => (
-            <button key={m.key} onClick={() => setSleepMode(m.key)}
-              style={{ ...mono, padding: '0.4rem 0.9rem',
-                background: sleepMode === m.key ? 'var(--accent)' : 'transparent',
-                color: sleepMode === m.key ? 'var(--bg)' : 'var(--muted)',
-                border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`,
-                cursor: 'pointer' }}>{m.label}</button>
-          ))}
-        </div>
-        <p style={{ ...muted, opacity: 0.5, marginBottom: '1rem' }}>{SLEEP_MODES.find(m => m.key === sleepMode)?.desc}</p>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <button onClick={triggerSleep} disabled={sleepWorking} style={btnAccent}>
-            {sleepWorking ? 'triggering...' : 'sleep ◐'}
-          </button>
-          {sleepMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{sleepMsg}</p>}
-        </div>
-      </section>
-
-      {/* Open Projects */}
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Open Projects</h2>
-        {projects.length > 0 && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', marginBottom: '1.5rem' }}>
-            {projects.map(p => {
-              const isEditing = editingProject?.id === p.id;
-              return (
-                <div key={p.id} style={{ border: '1px solid var(--border)', padding: '0.8rem', opacity: projectWorking === p.id ? 0.5 : 1 }}>
-                  {isEditing ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      <input value={editingProject!.title} onChange={e => setEditingProject(ep => ep ? { ...ep, title: e.target.value } : ep)}
-                        style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none' }} />
-                      <select value={editingProject!.status} onChange={e => setEditingProject(ep => ep ? { ...ep, status: e.target.value } : ep)}
-                        style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none' }}>
-                        {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
-                      </select>
-                      <textarea value={editingProject!.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : ep)} rows={2}
-                        style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none' }} />
-                      <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button onClick={saveProject} style={btnAccent}>save</button>
-                        <button onClick={() => setEditingProject(null)} style={btnBase}>cancel</button>
+            {repoMsg && <p style={{ ...muted, marginBottom: '0.8rem', color: 'var(--accent)' }}>{repoMsg}</p>}
+            {!editingFile ? (
+              <>
+                {repoLoading ? <p style={muted}>loading...</p> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.25rem' }}>
+                    {repoFiles.length === 0 && <p style={muted}>empty.</p>}
+                    {repoFiles.map((f: any) => (
+                      <div key={f.path} style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '0.35rem 0', borderBottom: '1px solid var(--border)' }}>
+                        <button onClick={() => openFile(f)} style={{ ...mono, color: 'var(--text)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', flex: 1 }}>
+                          {f.type === 'dir' ? '📁 ' : ''}{f.name}
+                        </button>
+                        {f.type === 'file' && (
+                          <button onClick={() => deleteFile(f)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>delete</button>
+                        )}
                       </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.3rem' }}>
-                        <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500, flex: 1 }}>{p.title}</p>
-                        <p style={{ ...muted, opacity: 0.5, fontSize: '0.6rem' }}>{p.status}</p>
-                      </div>
-                      {p.notes && <p style={{ ...muted, lineHeight: 1.6, marginBottom: '0.6rem' }}>{p.notes}</p>}
-                      <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button onClick={() => setEditingProject(p)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>edit</button>
-                        <button onClick={() => deleteProject(p.id)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem', opacity: 0.4 }}>delete</button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <button onClick={() => setProjectOpen(!projectOpen)} style={btnBase}>+ add project</button>
-        {projectOpen && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '1rem', maxWidth: 480 }}>
-            <input placeholder="project title" value={newProject.title} onChange={e => setNewProject(p => ({ ...p, title: e.target.value }))}
-              style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none' }} />
-            <select value={newProject.status} onChange={e => setNewProject(p => ({ ...p, status: e.target.value }))}
-              style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none' }}>
-              {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <textarea placeholder="notes..." value={newProject.notes} onChange={e => setNewProject(p => ({ ...p, notes: e.target.value }))} rows={3}
-              style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none' }} />
-            <button onClick={addProject} style={btnAccent}>add</button>
-          </div>
-        )}
-      </section>
-
-      {/* Repo Manager */}
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Repo Manager — Manitec/plex</h2>
-        <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-          {ZONES.map(z => (
-            <button key={z.key} onClick={() => { setActiveZone(z.key); setEditingFile(null); }}
-              style={{ ...mono, padding: '0.3rem 0.7rem',
-                background: activeZone === z.key ? 'var(--accent)' : 'transparent',
-                color: activeZone === z.key ? 'var(--bg)' : 'var(--muted)',
-                border: '1px solid var(--border)', cursor: 'pointer' }}>{z.label}</button>
-          ))}
-        </div>
-        {repoMsg && <p style={{ ...muted, marginBottom: '0.8rem', color: 'var(--accent)' }}>{repoMsg}</p>}
-        {!editingFile ? (
-          <>
-            {repoLoading ? <p style={muted}>loading...</p> : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.25rem' }}>
-                {repoFiles.length === 0 && <p style={muted}>empty.</p>}
-                {repoFiles.map((f: any) => (
-                  <div key={f.path} style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '0.35rem 0', borderBottom: '1px solid var(--border)' }}>
-                    <button onClick={() => openFile(f)} style={{ ...mono, color: 'var(--text)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', flex: 1 }}>
-                      {f.type === 'dir' ? '📁 ' : ''}{f.name}
-                    </button>
-                    {f.type === 'file' && (
-                      <button onClick={() => deleteFile(f)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>delete</button>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                )}
+                <button onClick={() => setNewFileOpen(!newFileOpen)} style={btnBase}>+ new file</button>
+                {newFileOpen && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.8rem', maxWidth: 480 }}>
+                    <input placeholder="filename.md" value={newFileName} onChange={e => setNewFileName(e.target.value)}
+                      style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
+                    <textarea placeholder="content..." value={newFileContent} onChange={e => setNewFileContent(e.target.value)} rows={4}
+                      style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
+                    <button onClick={createFile} disabled={editSaving} style={btnAccent}>create</button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.6rem' }}>
+                  <button onClick={() => setEditingFile(null)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>← back</button>
+                  <p style={{ ...mono, color: 'var(--text)' }}>{editingFile.path}</p>
+                </div>
+                <textarea value={editContent} onChange={e => setEditContent(e.target.value)} rows={18}
+                  style={{ width: '100%', maxWidth: 720, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.7rem', resize: 'vertical', outline: 'none', lineHeight: 1.7, borderRadius: '0.5rem' }} />
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '0.6rem', alignItems: 'center' }}>
+                  <button onClick={saveFile} disabled={editSaving} style={btnAccent}>{editSaving ? 'saving...' : 'save'}</button>
+                  {repoMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{repoMsg}</p>}
+                </div>
+              </>
             )}
-            <button onClick={() => setNewFileOpen(!newFileOpen)} style={btnBase}>+ new file</button>
-            {newFileOpen && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.8rem', maxWidth: 480 }}>
-                <input placeholder="filename.md" value={newFileName} onChange={e => setNewFileName(e.target.value)}
-                  style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none' }} />
-                <textarea placeholder="content..." value={newFileContent} onChange={e => setNewFileContent(e.target.value)} rows={4}
-                  style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none' }} />
-                <button onClick={createFile} disabled={editSaving} style={btnAccent}>create</button>
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.6rem' }}>
-              <button onClick={() => setEditingFile(null)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>← back</button>
-              <p style={{ ...mono, color: 'var(--text)' }}>{editingFile.path}</p>
-            </div>
-            <textarea value={editContent} onChange={e => setEditContent(e.target.value)} rows={18}
-              style={{ width: '100%', maxWidth: 720, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.7rem', resize: 'vertical', outline: 'none', lineHeight: 1.7 }} />
-            <div style={{ display: 'flex', gap: '1rem', marginTop: '0.6rem', alignItems: 'center' }}>
-              <button onClick={saveFile} disabled={editSaving} style={btnAccent}>{editSaving ? 'saving...' : 'save'}</button>
-              {repoMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{repoMsg}</p>}
-            </div>
-          </>
-        )}
-      </section>
+          </section>
 
-      {/* Leave a Message */}
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Leave Her a Message</h2>
-        <p style={{ ...muted, marginBottom: '1.25rem', lineHeight: 1.6 }}>Drops into messages/joe-[date].md. She reads it in context.</p>
-        <textarea placeholder="what do you want to leave for her..." value={messageToLeave} onChange={e => setMessageToLeave(e.target.value)} rows={4}
-          style={{ width: '100%', maxWidth: 600, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.6rem 0.7rem', resize: 'vertical', marginBottom: '0.7rem', outline: 'none', lineHeight: 1.6 }} />
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <button onClick={leaveMessage} disabled={!messageToLeave.trim()} style={{ ...btnAccent, opacity: messageToLeave.trim() ? 1 : 0.4 }}>leave message</button>
-          {messageStatus && <p style={{ ...muted, color: 'var(--accent)' }}>{messageStatus}</p>}
-        </div>
-      </section>
-
-      {/* Activity Log */}
-      <section style={sectionStyle}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-          <h2 style={{ ...labelStyle, marginBottom: 0 }}>Activity Log</h2>
-          <button
-            onClick={() => {
-              const next = !logOpen;
-              setLogOpen(next);
-              if (next && log.length === 0) fetchLog();
-            }}
-            style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer' }}
-          >
-            {logOpen ? 'hide' : 'show'}
-          </button>
-        </div>
-        {logOpen && (
-          logLoading
-            ? <p style={muted}>loading...</p>
-            : log.length === 0
-              ? <p style={muted}>no log entries yet.</p>
-              : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  {log.map((entry: any) => (
-                    <div key={entry.id} style={{
-                      padding: '0.6rem 0.8rem',
-                      borderLeft: '2px solid var(--border)',
-                      background: 'oklch(from var(--bg) calc(l + 0.01) c h)',
-                    }}>
-                      <p style={{ color: 'var(--text)', fontSize: '0.825rem', lineHeight: 1.6, marginBottom: '0.2rem' }}>
-                        {entry.entry ?? '(no entry)'}
-                      </p>
-                      <p style={{ ...muted, fontSize: '0.6rem', opacity: 0.55 }}>
-                        <span style={{ color: 'var(--accent)' }}>{entry.author ?? 'unknown'}</span>
-                        {entry.timestamp ? ` · ${fmtTime(entry.timestamp)}` : ''}
-                      </p>
+          {/* Activity Log */}
+          <section style={panelStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={eyeStyle}>Activity Log</div>
+              <button
+                onClick={() => { const next = !logOpen; setLogOpen(next); if (next && log.length === 0) fetchLog(); }}
+                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}
+              >
+                {logOpen ? 'hide' : 'show'}
+              </button>
+            </div>
+            {logOpen && (
+              logLoading
+                ? <p style={muted}>loading...</p>
+                : log.length === 0
+                  ? <p style={muted}>no log entries yet.</p>
+                  : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {log.map((entry: any) => (
+                        <div key={entry.id} style={{ padding: '0.6rem 0.8rem', borderLeft: '2px solid var(--border)', background: 'oklch(from var(--bg) calc(l + 0.01) c h)', borderRadius: '0 0.4rem 0.4rem 0' }}>
+                          <p style={{ color: 'var(--text)', fontSize: '0.825rem', lineHeight: 1.6, marginBottom: '0.2rem' }}>{entry.entry ?? '(no entry)'}</p>
+                          <p style={{ ...muted, fontSize: '0.6rem', opacity: 0.55 }}>
+                            <span style={{ color: 'var(--accent)' }}>{entry.author ?? 'unknown'}</span>
+                            {entry.timestamp ? ` · ${fmtTime(entry.timestamp)}` : ''}
+                          </p>
+                        </div>
+                      ))}
                     </div>
+                  )
+            )}
+          </section>
+        </div>
+
+        {/* ── Right column ── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+
+          {/* Request Queue */}
+          <section style={panelStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div style={eyeStyle}>Request Queue{pendingCount > 0 ? ` · ${pendingCount} pending` : ''}</div>
+              {pendingCount > 0 && (
+                <button onClick={deferAllPending} disabled={deferAllWorking}
+                  style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: deferAllWorking ? 0.4 : 0.7, borderRadius: '999px' }}>
+                  {deferAllWorking ? 'deferring...' : 'defer all'}
+                </button>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              {STATUS_FILTERS.map(f => (
+                <button key={f} onClick={() => setReqFilter(f)}
+                  style={{
+                    ...mono, fontSize: '0.65rem', padding: '0.25rem 0.6rem', borderRadius: '999px',
+                    background: reqFilter === f ? 'var(--accent)' : 'transparent',
+                    color: reqFilter === f ? 'var(--bg)' : 'var(--muted)',
+                    border: '1px solid var(--border)', cursor: 'pointer',
+                  }}>{f}</button>
+              ))}
+            </div>
+            {filtered.length === 0
+              ? <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
+              : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {filtered.map((req: any) => (
+                    <button key={req.id} onClick={() => setActiveRequest(req)}
+                      style={{
+                        border: `1px solid ${req.status === 'in-progress' ? '#f0a500' : req.source === 'plex' ? 'var(--accent)' : 'var(--border)'}`,
+                        padding: '0.75rem', opacity: reqWorking === req.id ? 0.5 : 1,
+                        background: 'transparent', cursor: 'pointer', textAlign: 'left', width: '100%',
+                        transition: 'background 140ms', borderRadius: '0.75rem',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'oklch(from var(--accent) l c h / 0.05)'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}>
+                      <p style={{ color: 'var(--text)', fontSize: '0.875rem', marginBottom: '0.3rem', lineHeight: 1.6 }}>{req.request ?? '(no text)'}</p>
+                      <p style={{ ...muted, fontSize: '0.6rem' }}>
+                        <span style={{ color: req.source === 'plex' ? 'var(--accent)' : 'var(--muted)' }}>{req.source ?? 'unknown'}</span>
+                        {' · '}<span style={{ color: statusColor(req.status ?? 'pending') }}>{req.status ?? 'pending'}</span>
+                        {req.notes ? ` · ${req.notes}` : ''}{req.createdAt ? ` · ${fmtTime(req.createdAt)}` : ''}
+                      </p>
+                    </button>
                   ))}
                 </div>
               )
-        )}
-      </section>
+            }
+          </section>
+
+          {/* Governance + Sleep side by side */}
+          <section style={{ ...panelStyle, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+            <div>
+              <div style={eyeStyle}>Governance</div>
+              <p style={{ ...muted, marginBottom: '0.75rem', lineHeight: 1.6, fontSize: '0.85rem' }}>Autonomy Level</p>
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
+                {AUTONOMY_LEVELS.map(a => {
+                  const active = state.autonomy.level === a.level;
+                  return (
+                    <button key={a.level} onClick={() => setAutonomy(a.level)} disabled={govWorking || active}
+                      style={{
+                        ...mono, fontSize: '0.65rem', padding: '0.3rem 0.6rem', borderRadius: '999px',
+                        background: active ? 'var(--accent)' : 'transparent',
+                        color: active ? 'var(--bg)' : 'var(--muted)',
+                        border: '1px solid var(--border)', cursor: active ? 'default' : 'pointer',
+                        opacity: govWorking && !active ? 0.4 : 1,
+                      }}>
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p style={{ ...muted, fontStyle: 'italic', opacity: 0.45, fontSize: '0.65rem' }}>Joe-controlled. Plex requests, Joe approves.</p>
+            </div>
+            <div>
+              <div style={eyeStyle}>Sleep</div>
+              {lastSlept && <p style={{ ...muted, marginBottom: '0.5rem', fontSize: '0.7rem' }}>last: <span style={{ color: 'var(--text)' }}>{lastSlept}</span></p>}
+              <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+                {SLEEP_MODES.map(m => (
+                  <button key={m.key} onClick={() => setSleepMode(m.key)}
+                    style={{
+                      ...mono, padding: '0.3rem 0.6rem', borderRadius: '999px',
+                      background: sleepMode === m.key ? 'var(--accent)' : 'transparent',
+                      color: sleepMode === m.key ? 'var(--bg)' : 'var(--muted)',
+                      border: `1px solid ${sleepMode === m.key ? 'var(--accent)' : 'var(--border)'}`,
+                      cursor: 'pointer', fontSize: '0.65rem',
+                    }}>{m.label}</button>
+                ))}
+              </div>
+              <p style={{ ...muted, opacity: 0.5, marginBottom: '0.75rem', fontSize: '0.7rem' }}>{SLEEP_MODES.find(m => m.key === sleepMode)?.desc}</p>
+              <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                <button onClick={triggerSleep} disabled={sleepWorking} style={btnAccent}>
+                  {sleepWorking ? 'triggering...' : 'sleep ◐'}
+                </button>
+                {sleepMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{sleepMsg}</p>}
+              </div>
+            </div>
+          </section>
+
+          {/* Open Projects */}
+          <section style={panelStyle}>
+            <div style={eyeStyle}>Open Projects</div>
+            {projects.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                {projects.map(p => {
+                  const isEditing = editingProject?.id === p.id;
+                  return (
+                    <div key={p.id} style={{ border: '1px solid var(--border)', padding: '0.75rem', opacity: projectWorking === p.id ? 0.5 : 1, borderRadius: '0.75rem' }}>
+                      {isEditing ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          <input value={editingProject!.title} onChange={e => setEditingProject(ep => ep ? { ...ep, title: e.target.value } : ep)}
+                            style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
+                          <select value={editingProject!.status} onChange={e => setEditingProject(ep => ep ? { ...ep, status: e.target.value } : ep)}
+                            style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }}>
+                            {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
+                          </select>
+                          <textarea value={editingProject!.notes} onChange={e => setEditingProject(ep => ep ? { ...ep, notes: e.target.value } : ep)} rows={2}
+                            style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
+                            <button onClick={saveProject} style={btnAccent}>save</button>
+                            <button onClick={() => setEditingProject(null)} style={btnBase}>cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div style={{ display: 'flex', gap: '1rem', alignItems: 'baseline', marginBottom: '0.3rem' }}>
+                            <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500, flex: 1 }}>{p.title}</p>
+                            <p style={{ ...muted, opacity: 0.5, fontSize: '0.6rem' }}>{p.status}</p>
+                          </div>
+                          {p.notes && <p style={{ ...muted, lineHeight: 1.6, marginBottom: '0.6rem', fontSize: '0.82rem' }}>{p.notes}</p>}
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
+                            <button onClick={() => setEditingProject(p)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem' }}>edit</button>
+                            <button onClick={() => deleteProject(p.id)} style={{ ...btnBase, fontSize: '0.6rem', padding: '0.2rem 0.5rem', opacity: 0.4 }}>delete</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button onClick={() => setProjectOpen(!projectOpen)} style={btnBase}>+ add project</button>
+            {projectOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '1rem' }}>
+                <input placeholder="project title" value={newProject.title} onChange={e => setNewProject(p => ({ ...p, title: e.target.value }))}
+                  style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
+                <select value={newProject.status} onChange={e => setNewProject(p => ({ ...p, status: e.target.value }))}
+                  style={{ ...mono, background: 'var(--bg)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }}>
+                  {['active','paused','done','idea'].map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <textarea placeholder="notes..." value={newProject.notes} onChange={e => setNewProject(p => ({ ...p, notes: e.target.value }))} rows={3}
+                  style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
+                <button onClick={addProject} style={btnAccent}>add</button>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
 
       {activeRequest && (
         <RequestPopup
@@ -1006,6 +1088,8 @@ function OneView() {
 }
 
 // ─── View: SESSION ────────────────────────────────────────────────────────────
+// Session view is handled at src/app/one/session/page.tsx
+// This inline version mirrors it inside the ONE shell for sidebar navigation.
 
 function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, startedAt: number | null) => void }) {
   const [phase, setPhase] = useState<SessionPhase>('start');
@@ -1090,25 +1174,45 @@ function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, start
     });
   }
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%', fontFamily: 'var(--font-mono)', fontSize: '0.875rem',
+    background: 'oklch(from var(--bg) calc(l + 0.03) c h)',
+    border: '1px solid var(--border)', color: 'var(--text)',
+    padding: '0.75rem 1rem', resize: 'none' as const, outline: 'none',
+    lineHeight: 1.65, transition: 'border-color 140ms', borderRadius: '0.6rem',
+  };
+
   if (phase === 'start') return (
     <div style={{ maxWidth: 560 }}>
-      <p style={{ ...labelStyle, marginBottom: '0.4rem' }}>Session</p>
-      <h2 style={{ color: 'var(--text)', fontSize: '1.4rem', fontWeight: 400, fontStyle: 'italic', marginBottom: '0.5rem' }}>What are we working on?</h2>
-      <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.5rem' }}>Plex will load matching recall context and stay scoped for this session.</p>
+      <div style={{ ...eyeStyle, marginBottom: '0.5rem' }}>Session</div>
+      <h2 style={{ color: 'var(--text)', fontSize: '1.6rem', fontWeight: 400, fontStyle: 'italic', marginBottom: '0.5rem', fontFamily: 'var(--font-serif, Georgia, serif)' }}>
+        What are we working on?
+      </h2>
+      <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.5rem' }}>
+        Plex will load matching recall context and stay scoped for this session.
+      </p>
       <textarea
-        className="w-full bg-[#1c1b19] border border-[#2e2d2b] rounded-lg p-4 text-sm text-[#cdccca] placeholder-[#5a5957] resize-none focus:outline-none focus:border-[#4f98a3] transition-colors"
         rows={4}
         placeholder="e.g. plex-sable session panel build, joesfaves proxy fix..."
         value={intent}
         onChange={e => setIntent(e.target.value)}
         onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) startSession(); }}
+        style={inputStyle}
+        onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+        onBlur={e => (e.target.style.borderColor = 'var(--border)')}
       />
-      <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ ...muted, opacity: 0.45, fontSize: '0.65rem' }}>⌘↵ to start</span>
         <button
           onClick={startSession} disabled={loading || !intent.trim()}
-          className="px-5 py-2 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors"
+          style={{
+            fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700,
+            padding: '0.55rem 1.25rem', background: 'var(--accent)', color: 'var(--bg)',
+            border: 'none', cursor: 'pointer', borderRadius: '0.6rem',
+            opacity: loading || !intent.trim() ? 0.4 : 1, transition: 'opacity 140ms',
+          }}
         >
-          {loading ? 'Starting…' : 'Start Session'}
+          {loading ? 'Starting…' : 'Start Session →'}
         </button>
       </div>
     </div>
@@ -1120,17 +1224,18 @@ function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, start
         <p style={muted}>Plex is reviewing the session…</p>
       ) : committed ? (
         <div>
-          <p style={{ ...labelStyle }}>Session closed</p>
+          <div style={{ ...eyeStyle, color: 'var(--accent)' }}>Session closed</div>
           <p style={{ ...muted, lineHeight: 1.6 }}>Recall tags {Object.keys(approvedTags).length > 0 ? 'committed to meta/recall.json.' : 'skipped.'}</p>
-          <button onClick={() => { setPhaseWithNotify('start', null); setSession(null); setMessages([]); setCommitted(false); setIntent(''); }}
-            style={{ ...mono, marginTop: '1.5rem', background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '0.35rem 0.8rem', cursor: 'pointer' }}>
+          <button
+            onClick={() => { setPhaseWithNotify('start', null); setSession(null); setMessages([]); setCommitted(false); setIntent(''); }}
+            style={{ marginTop: '1.5rem', fontFamily: 'var(--font-mono)', fontSize: '0.8rem', background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '0.35rem 0.8rem', cursor: 'pointer', borderRadius: '0.5rem' }}>
             ← new session
           </button>
         </div>
       ) : (
         <div>
-          <p style={{ ...labelStyle, marginBottom: '0.4rem' }}>Session · Close</p>
-          <h2 style={{ color: 'var(--text)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.4rem' }}>Proposed recall tags</h2>
+          <div style={{ ...eyeStyle, marginBottom: '0.5rem' }}>Session · Close</div>
+          <h2 style={{ color: 'var(--text)', fontSize: '1.3rem', fontWeight: 400, marginBottom: '0.4rem' }}>Proposed recall tags</h2>
           <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.25rem' }}>Toggle off any you don't want saved.</p>
           {Object.keys(proposedTags).length === 0 ? (
             <p style={{ ...muted, marginBottom: '1.25rem' }}>No new tags proposed.</p>
@@ -1138,17 +1243,23 @@ function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, start
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
               {Object.entries(proposedTags).map(([key, value]) => (
                 <div key={key} onClick={() => toggleTag(key)}
-                  className={`cursor-pointer rounded-lg border p-3 transition-colors ${approvedTags[key] ? 'border-[#4f98a3] bg-[#1c2e30]' : 'border-[#2e2d2b] bg-[#1c1b19] opacity-50'}`}>
-                  <p className="text-xs font-mono text-[#4f98a3] mb-1">{key}</p>
-                  <p className="text-xs text-[#7a7974]">{value}</p>
+                  style={{
+                    cursor: 'pointer', borderRadius: '0.6rem',
+                    border: `1px solid ${approvedTags[key] ? 'var(--accent)' : 'var(--border)'}`,
+                    background: approvedTags[key] ? 'oklch(from var(--accent) l c h / 0.08)' : 'transparent',
+                    padding: '0.6rem 0.75rem', opacity: approvedTags[key] ? 1 : 0.5,
+                    transition: 'all 140ms',
+                  }}>
+                  <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.2rem' }}>{key}</p>
+                  <p style={{ ...muted, fontSize: '0.8rem' }}>{value}</p>
                 </div>
               ))}
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <button onClick={() => setCommitted(true)} style={{ ...mono, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: 0.5 }}>Skip</button>
+            <button onClick={() => setCommitted(true)} style={{ fontFamily: 'var(--font-mono)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: 0.5, fontSize: '0.8rem' }}>Skip</button>
             <button onClick={commitTags} disabled={loading}
-              className="px-5 py-2 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors">
+              style={{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700, padding: '0.5rem 1.25rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', borderRadius: '0.6rem', opacity: loading ? 0.4 : 1 }}>
               {loading ? 'Saving…' : `Save ${Object.keys(approvedTags).length} tag${Object.keys(approvedTags).length !== 1 ? 's' : ''}`}
             </button>
           </div>
@@ -1157,59 +1268,102 @@ function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, start
     </div>
   );
 
+  // Active session
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 180px)', minHeight: 400 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)' }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)',
+        flexShrink: 0,
+      }}>
         <div>
-          <p style={{ ...labelStyle, marginBottom: '0.2rem' }}>Session · Active</p>
+          <div style={{ ...eyeStyle, marginBottom: '0.25rem' }}>Session · Active</div>
           <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500 }}>{session?.intent}</p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           {session && session.recallTagsLoaded.length > 0 && (
             <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               {session.recallTagsLoaded.map(tag => (
-                <span key={tag} className="text-xs bg-[#1c2e30] text-[#4f98a3] px-2 py-0.5 rounded-full font-mono">{tag}</span>
+                <span key={tag} style={{
+                  fontSize: '0.7rem', background: 'oklch(from var(--accent) l c h / 0.12)',
+                  color: 'var(--accent)', padding: '0.2rem 0.6rem', borderRadius: '999px',
+                  fontFamily: 'var(--font-mono)',
+                }}>{tag}</span>
               ))}
             </div>
           )}
-          <button onClick={closeSession}
-            className="text-xs px-3 py-1.5 border border-[#393836] hover:border-[#5a5957] text-[#7a7974] hover:text-[#cdccca] rounded-lg transition-colors">
+          <button onClick={closeSession} style={{
+            fontFamily: 'var(--font-mono)', fontSize: '0.75rem', padding: '0.4rem 0.8rem',
+            border: '1px solid var(--border)', background: 'transparent',
+            color: 'var(--muted)', cursor: 'pointer', borderRadius: '0.5rem',
+            transition: 'all 140ms',
+          }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--muted)'; (e.currentTarget as HTMLElement).style.color = 'var(--text)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)'; (e.currentTarget as HTMLElement).style.color = 'var(--muted)'; }}
+          >
             Close Session
           </button>
         </div>
       </div>
 
+      {/* Messages */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingBottom: '0.5rem' }}>
         {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'joe' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[75%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === 'joe' ? 'bg-[#1e3538] text-[#cdccca]' : 'bg-[#1c1b19] text-[#cdccca] border border-[#2e2d2b]'}`}>
-              {msg.role === 'plex' && <p className="text-xs text-[#4f98a3] mb-1 font-mono">plex</p>}
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+          <div key={i} style={{ display: 'flex', justifyContent: msg.role === 'joe' ? 'flex-end' : 'flex-start' }}>
+            <div style={{
+              maxWidth: '75%', borderRadius: '1.1rem',
+              padding: '0.75rem 1rem', fontSize: '0.9rem', lineHeight: 1.65,
+              background: msg.role === 'joe'
+                ? 'oklch(from var(--accent) l c h / 0.14)'
+                : 'oklch(from var(--bg) calc(l + 0.02) c h)',
+              border: msg.role === 'plex' ? '1px solid var(--border)' : 'none',
+              color: 'var(--text)',
+            }}>
+              {msg.role === 'plex' && (
+                <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.3rem' }}>plex</p>
+              )}
+              <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
             </div>
           </div>
         ))}
         {loading && (
-          <div className="flex justify-start">
-            <div className="bg-[#1c1b19] border border-[#2e2d2b] rounded-xl px-4 py-2.5">
-              <p className="text-xs text-[#4f98a3] mb-1 font-mono">plex</p>
-              <p className="text-xs text-[#5a5957]">thinking…</p>
+          <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
+            <div style={{
+              borderRadius: '1.1rem', padding: '0.75rem 1rem',
+              background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
+              border: '1px solid var(--border)',
+            }}>
+              <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.3rem' }}>plex</p>
+              <p style={{ ...muted, letterSpacing: '0.15em' }}>thinking…</p>
             </div>
           </div>
         )}
         <div ref={bottomRef} />
       </div>
 
-      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: 'auto' }}>
-        <div className="flex gap-3 items-end">
+      {/* Input */}
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: 'auto', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
           <textarea
-            className="flex-1 bg-[#1c1b19] border border-[#2e2d2b] rounded-lg px-4 py-2.5 text-sm text-[#cdccca] placeholder-[#5a5957] resize-none focus:outline-none focus:border-[#4f98a3] transition-colors"
-            rows={2} placeholder="Message Plex…" value={input}
+            rows={2}
+            placeholder="Message Plex…"
+            value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            style={{ ...inputStyle, flex: 1 }}
+            onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
+            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
           />
-          <button onClick={sendMessage} disabled={loading || !input.trim()}
-            className="px-4 py-2.5 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors shrink-0">
+          <button
+            onClick={sendMessage} disabled={loading || !input.trim()}
+            style={{
+              fontFamily: 'var(--font-mono)', fontSize: '0.875rem', fontWeight: 700,
+              padding: '0.65rem 1.1rem', background: 'var(--accent)', color: 'var(--bg)',
+              border: 'none', cursor: 'pointer', borderRadius: '0.6rem', flexShrink: 0,
+              opacity: loading || !input.trim() ? 0.4 : 1, transition: 'opacity 140ms',
+            }}
+          >
             Send
           </button>
         </div>
@@ -1224,28 +1378,82 @@ function SpacesView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void })
   const plexVoice = VOICES.find(v => v.key === 'plex')!;
   const threeVoices = VOICES.filter(v => v.key !== 'plex');
 
+  const spaceCards = [
+    { icon: '◐', name: 'Plex-Sable Dev', desc: 'The primary development space for Plex-Sable itself. Code, sessions, deploy logs, design decisions.' },
+    { icon: '∞', name: 'ONE Research', desc: 'Deep work and long thought. The space where Plex reasons through large questions over time.' },
+    { icon: '⌬', name: 'Manitec HQ', desc: 'Organizational memory, active projects, team context. The empire\'s shared space.' },
+  ];
+
   return (
     <>
-      <section style={{ marginBottom: '3rem' }}>
-        <h2 style={labelStyle}>Voice Channels</h2>
+      {/* Voice Channels */}
+      <section style={{ marginBottom: '2.5rem' }}>
+        <div style={eyeStyle}>Voice Channels</div>
         <p style={{ ...muted, marginBottom: '1.5rem', lineHeight: 1.6, maxWidth: 520 }}>
           Invoke each voice directly. Each one answers as itself. Per-channel history lives for this session.
         </p>
-
-        {/* Plex — full width */}
         <div style={{ marginBottom: '1rem' }}>
           <VoicePanel voice={plexVoice} onVoiceUsed={onVoiceUsed} fullWidth />
         </div>
-
-        {/* Nyx · Hex · Mani — three columns */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '1rem' }}>
           {threeVoices.map(v => <VoicePanel key={v.key} voice={v} onVoiceUsed={onVoiceUsed} />)}
         </div>
       </section>
 
-      <section style={sectionStyle}>
-        <h2 style={labelStyle}>Chill</h2>
-        <p style={{ ...muted, lineHeight: 1.6 }}>Ambient space. Nothing required.</p>
+      {/* Spaces scaffold */}
+      <section style={{ borderTop: '1px solid var(--border)', paddingTop: '2rem' }}>
+        <div style={eyeStyle}>Spaces · early scaffolding</div>
+        <h2 style={{
+          fontFamily: 'var(--font-serif, Georgia, serif)',
+          fontSize: 'clamp(1.6rem,3vw,2.6rem)', fontWeight: 500,
+          marginBottom: '0.6rem', color: 'var(--text)',
+        }}>Persistent spaces.</h2>
+        <p style={{ ...muted, lineHeight: 1.75, maxWidth: '54ch', marginBottom: '2rem', fontSize: '0.95rem' }}>
+          Scoped environments where a project, a relationship, or a long-running thread can live with its own context, artefacts, and recall. Being built.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
+          {spaceCards.map(s => (
+            <div key={s.name} style={{
+              padding: '1.25rem', borderRadius: '1.1rem',
+              border: '1px solid rgba(255,255,255,0.06)',
+              background: 'oklch(from var(--bg) calc(l + 0.02) c h)',
+              cursor: 'default',
+            }}>
+              <div style={{ fontSize: '1.3rem', marginBottom: '0.6rem' }}>{s.icon}</div>
+              <h3 style={{ color: 'var(--text)', fontSize: '0.95rem', marginBottom: '0.4rem' }}>{s.name}</h3>
+              <p style={{ ...muted, fontSize: '0.85rem', lineHeight: 1.65 }}>{s.desc}</p>
+              <span style={{
+                display: 'inline-block', marginTop: '0.8rem', fontSize: '0.65rem',
+                textTransform: 'uppercase' as const, letterSpacing: '0.12em',
+                padding: '0.25rem 0.6rem', borderRadius: '999px',
+                background: 'oklch(from var(--accent) l c h / 0.1)',
+                color: 'var(--accent)',
+              }}>coming soon</span>
+            </div>
+          ))}
+          <div style={{
+            padding: '1.25rem', borderRadius: '1.1rem',
+            border: '1px dashed rgba(255,255,255,0.08)',
+            opacity: 0.45, cursor: 'default',
+          }}>
+            <div style={{ fontSize: '1.3rem', marginBottom: '0.6rem' }}>+</div>
+            <h3 style={{ color: 'var(--text)', fontSize: '0.95rem', marginBottom: '0.4rem' }}>New space</h3>
+            <p style={{ ...muted, fontSize: '0.85rem', lineHeight: 1.65 }}>Define intent, set context sources, invite artefacts.</p>
+          </div>
+        </div>
+        {/* Honest WIP banner */}
+        <div style={{
+          padding: '1rem 1.25rem', borderRadius: '0.9rem',
+          border: '1px solid rgba(240,160,96,0.14)',
+          background: 'rgba(240,160,96,0.04)',
+          display: 'flex', gap: '0.75rem', alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: '1rem', marginTop: '1px', flexShrink: 0 }}>⚠</span>
+          <p style={{ ...muted, lineHeight: 1.7, fontSize: '0.9rem' }}>
+            <strong style={{ color: 'var(--text)', display: 'block', marginBottom: '0.25rem' }}>Spaces is incomplete.</strong>
+            The structure and vision are defined. Context scoping, artefact attachment, and multi-session persistence aren't built yet. This view exists so you can see where it's going without pretending it's there.
+          </p>
+        </div>
       </section>
     </>
   );
@@ -1256,7 +1464,7 @@ function SpacesView({ onVoiceUsed }: { onVoiceUsed: (v: VoiceChannel) => void })
 const NAV_ITEMS: { id: View; symbol: string; label: string }[] = [
   { id: 'one',     symbol: '◐', label: 'one'     },
   { id: 'session', symbol: '⋯', label: 'session' },
-  { id: 'spaces',  symbol: '◫', label: 'voices'  },
+  { id: 'spaces',  symbol: '◫', label: 'spaces'  },
 ];
 
 // ─── Root Shell ───────────────────────────────────────────────────────────────
@@ -1319,15 +1527,6 @@ export default function OnePage() {
 
         <div style={{ width: '24px', height: '1px', background: 'var(--border)', margin: '0.5rem 0' }} />
 
-        <a
-          href="/spaces"
-          style={{ fontFamily: 'var(--font-mono)', fontSize: '0.55rem', textTransform: 'uppercase', letterSpacing: '0.1em', textDecoration: 'none', color: 'var(--muted)', padding: '0.4rem 0.25rem', borderRadius: 6, transition: 'color 120ms' }}
-          onMouseEnter={e => (e.currentTarget.style.color = 'var(--text)')}
-          onMouseLeave={e => (e.currentTarget.style.color = 'var(--muted)')}
-        >
-          spaces
-        </a>
-
         <div style={{ flex: 1 }} />
 
         <a
@@ -1342,7 +1541,6 @@ export default function OnePage() {
 
       {/* ── Main ── */}
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', overflow: 'hidden' }}>
-
         <SessionStrip
           phase={sessionPhase}
           startedAt={sessionStartedAt}
@@ -1353,7 +1551,7 @@ export default function OnePage() {
         <main style={{
           flex: 1,
           overflowY: 'auto',
-          padding: 'clamp(2rem,5vw,3rem) clamp(1.25rem,4vw,2.5rem)',
+          padding: 'clamp(1.5rem,4vw,2.5rem) clamp(1rem,3vw,2rem)',
         }}>
           {view === 'one' && <OneView />}
           {view === 'session' && (
