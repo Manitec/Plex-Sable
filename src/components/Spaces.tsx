@@ -9,7 +9,7 @@ const spaces = [
     sub: 'development · active',
     desc: 'The primary development space for Plex-Sable itself. Code, sessions, deploy logs, design decisions.',
     status: 'active',
-    href: '/spaces/plex-sable',
+    href: '/one',
   },
   {
     id: 'deep-work',
@@ -25,7 +25,7 @@ const spaces = [
     glyph: '⬢',
     name: 'manitec-hq',
     sub: 'empire · shared',
-    desc: 'Organizational memory, active projects, team context. The empire\u2019s shared space.',
+    desc: 'Organizational memory, active projects, team context. The empire’s shared space.',
     status: 'coming soon',
     href: null,
   },
@@ -48,7 +48,7 @@ export default function Spaces() {
         {/* Section header */}
         <div style={{ display: 'flex', alignItems: 'baseline', gap: '1.5rem', marginBottom: '1rem' }}>
           <h2 style={{ fontSize: 'clamp(1.1rem,2.5vw,1.5rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', fontFamily: 'var(--font-garamond)', margin: 0 }}>spaces</h2>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--muted)', opacity: 0.5 }}>collaborative · scoped</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--muted)', opacity: 0.5 }}>collaborative · scoped</span>
         </div>
         <p style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: '2.5rem', opacity: 0.7, maxWidth: '540px' }}>
           Scoped collaborative environments — a place where a project, a relationship, or a long-running thread can live with its own context, artefacts, and recall.
@@ -61,7 +61,7 @@ export default function Spaces() {
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.4rem', color: 'var(--accent)', opacity: 0.6 }}>{s.glyph}</span>
                 <span style={{
-                  fontFamily: 'var(--font-mono)', fontSize: '0.6rem', textTransform: 'uppercase',
+                  fontFamily: 'var(--font-mono)', fontSize: '0.6rem', textTransform: 'uppercase' as const,
                   letterSpacing: '0.1em', padding: '0.2rem 0.5rem',
                   border: '1px solid var(--border)',
                   color: s.status === 'active' ? 'var(--accent)' : 'var(--muted)',
@@ -75,18 +75,18 @@ export default function Spaces() {
                 <Link href={s.href} style={{
                   display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
                   marginTop: '1.25rem', fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
-                  textTransform: 'uppercase', letterSpacing: '0.1em',
+                  textTransform: 'uppercase' as const, letterSpacing: '0.1em',
                   color: 'var(--accent)', textDecoration: 'none', opacity: 0.7,
                 }}>enter ↗</Link>
               )}
             </div>
           ))}
 
-          {/* Voices sub-panel — same grid border, merges seamlessly */}
+          {/* Voices sub-panel */}
           <div style={{ background: 'var(--surface)', padding: '1.75rem', gridColumn: '1 / -1' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem', marginBottom: '1.25rem' }}>
               <span style={{ fontFamily: 'var(--font-garamond)', fontSize: '1rem', fontStyle: 'italic', color: 'var(--text)', opacity: 0.6 }}>voices</span>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.12em', color: 'var(--muted)', opacity: 0.4 }}>reach her directly</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.6rem', textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--muted)', opacity: 0.4 }}>reach her directly</span>
             </div>
             <div style={{ display: 'flex', gap: '1px', background: 'var(--border)', width: 'fit-content' }}>
               {voices.map(v => (
@@ -104,7 +104,7 @@ export default function Spaces() {
                   onMouseLeave={e => (e.currentTarget.style.background = 'var(--bg)')}
                 >
                   <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1rem', color: 'var(--accent)', opacity: 0.55 }}>{v.glyph}</span>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--muted)', opacity: 0.7 }}>{v.name}</span>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase' as const, letterSpacing: '0.1em', color: 'var(--muted)', opacity: 0.7 }}>{v.name}</span>
                 </Link>
               ))}
             </div>
