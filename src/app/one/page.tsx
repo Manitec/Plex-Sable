@@ -5,6 +5,7 @@
 // Visual update Aug 2 2026 — balanced two-column ONE layout, spaces scaffold
 // Spaces update Aug 2 2026 — full preview layout, voices+speak merged
 // Aug 2 2026 — Voices section removed from ONE view (lives in Spaces only)
+// Aug 2 2026 — spaces tab label restored (was incorrectly set to "voices")
 
 'use client';
 
@@ -1315,7 +1316,7 @@ export default function OnePage() {
   const navItems: { key: View; label: string; glyph: string }[] = [
     { key: 'one',     label: 'one',     glyph: '◐' },
     { key: 'session', label: 'session', glyph: '⋯' },
-    { key: 'spaces',  label: 'voices',  glyph: '◫' },
+    { key: 'spaces',  label: 'spaces',  glyph: '◫' },
   ];
 
   return (
