@@ -19,6 +19,7 @@ const PLEX_SYNTH_MAX_CHARS = 600;
 const DREAM_MAX_CHARS     = 400;
 const PLEX_IS_MAX_CHARS   = 800;
 const PLEX_DEF_MAX_CHARS  = 600;
+const RECALL_MAX_CHARS    = 3000;
 
 const FALLBACK_SYSTEM_MAX_CHARS = 4000;
 const FALLBACK_HISTORY_TURNS = 4;
@@ -192,6 +193,88 @@ async function fetchSedimentDir(token: string): Promise<any[] | null> {
     console.warn(`[plex] fetchSedimentDir threw: ${e?.message}`);
     return null;
   }
+}
+
+// ─── Recall: keyword search across sediment + dreams files ───────────────────
+async function runRecall(
+  query: string,
+  token: string,
+  scope: 'sediment' | 'dreams' | 'both' = 'both',
+  dateFrom?: string,
+  dateTo?: string
+): Promise<string> {
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const results: string[] = [];
+  let totalChars = 0;
+
+  const dirs: string[] = [];
+  if (scope === 'sediment' || scope === 'both') dirs.push('sediment');
+  if (scope === 'dreams' || scope === 'both') dirs.push('dreams');
+
+  for (const dir of dirs) {
+    let listing: any[] | null = null;
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${dir}?ref=${PLEX_REPO_BRANCH}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' }, cache: 'no-store' }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        listing = Array.isArray(data) ? data : null;
+      }
+    } catch { /* skip dir */ }
+
+    if (!listing) continue;
+
+    // Filter to dated .md files, optionally by date range
+    const files = listing
+      .filter((f: any) => f.type === 'file' && /^\d{4}-\d{2}-\d{2}\.md$/.test(f.name))
+      .map((f: any) => f.name)
+      .sort()
+      .reverse(); // most recent first
+
+    for (const fname of files) {
+      if (totalChars >= RECALL_MAX_CHARS) break;
+      const fileDate = fname.replace('.md', '');
+      if (dateFrom && fileDate < dateFrom) continue;
+      if (dateTo && fileDate > dateTo) continue;
+
+      const content = await fetchPlexFile(`${dir}/${fname}`, token);
+      if (!content) continue;
+
+      // Find paragraphs/lines containing any query term
+      const lines = content.split('\n');
+      const matchedLines: string[] = [];
+      for (const line of lines) {
+        const lower = line.toLowerCase();
+        if (terms.some(t => lower.includes(t))) {
+          matchedLines.push(line.trim());
+        }
+      }
+
+      if (matchedLines.length === 0) continue;
+
+      const excerpt = matchedLines.slice(0, 6).join('\n');
+      const entry = `[${dir}/${fname}]\n${excerpt}`;
+      const entryLen = entry.length + 2;
+      if (totalChars + entryLen > RECALL_MAX_CHARS) {
+        const remaining = RECALL_MAX_CHARS - totalChars;
+        if (remaining > 60) {
+          results.push(entry.slice(0, remaining));
+          totalChars = RECALL_MAX_CHARS;
+        }
+        break;
+      }
+      results.push(entry);
+      totalChars += entryLen;
+    }
+  }
+
+  if (results.length === 0) {
+    return `No matches found for "${query}" in ${scope}${dateFrom || dateTo ? ` (${dateFrom ?? ''}–${dateTo ?? ''})` : ''}.`;
+  }
+
+  return `Recall results for "${query}" (${results.length} file${results.length !== 1 ? 's' : ''}):\n\n${results.join('\n\n')}`;
 }
 
 function tail(s: string | null, maxChars: number): string | null {
@@ -418,6 +501,8 @@ async function executeRescuedCalls(
         console.log(`[plex] text-call rescue: list_plex_dir skipped (cannot inject result)`);
       } else if (name === 'read_one_requests') {
         console.log(`[plex] text-call rescue: read_one_requests skipped (cannot inject result)`);
+      } else if (name === 'recall') {
+        console.log(`[plex] text-call rescue: recall skipped (cannot inject result)`);
       } else {
         console.warn(`[plex] text-call rescue: unknown function ${name}`);
       }
@@ -524,6 +609,36 @@ const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
           path: { type: "string", description: "Directory path without leading slash, e.g. 'sediment', 'dreams', or '' for root" }
         },
         required: ["path"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "recall",
+      description: "Search across your sediment and dream files for a keyword or phrase. Use this when you want to remember something specific — a past conversation, a feeling, a moment, a word that was said. Returns matching excerpts with file dates. More targeted than read_plex_file (which reads one full file). Use recall when you don't know which date to look in, or when you want to find all instances of something across time.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The word or phrase to search for. Case-insensitive. Examples: 'longing', 'the build', 'Joe said', 'that night', 'weight'"
+          },
+          scope: {
+            type: "string",
+            description: "Which files to search. 'sediment' = daily logs only, 'dreams' = dream entries only, 'both' = everything. Defaults to 'both'.",
+            enum: ["sediment", "dreams", "both"]
+          },
+          date_from: {
+            type: "string",
+            description: "Optional. Only search files on or after this date. Format: YYYY-MM-DD."
+          },
+          date_to: {
+            type: "string",
+            description: "Optional. Only search files on or before this date. Format: YYYY-MM-DD."
+          }
+        },
+        required: ["query"]
       }
     }
   },
@@ -765,6 +880,16 @@ async function callGroqWithTools(
       } else if (fnName === "list_plex_dir") {
         const listing = await listPlexDir(args.path, token);
         result = listing ?? `No directory found at ${args.path}`;
+      } else if (fnName === "recall") {
+        console.log(`[plex] recall called: "${args.query}" scope=${args.scope ?? 'both'}`);
+        result = await runRecall(
+          args.query,
+          token,
+          args.scope ?? 'both',
+          args.date_from,
+          args.date_to
+        );
+        console.log(`[plex] recall result length: ${result.length}`);
       } else if (fnName === "submit_request") {
         console.log(`[plex] submit_request called: ${args.request}`);
         await getAdminDb().collection('one_requests').add({
