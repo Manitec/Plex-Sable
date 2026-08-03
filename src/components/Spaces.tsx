@@ -63,7 +63,7 @@ export default function Spaces() {
               position: 'relative',
               display: 'flex',
               flexDirection: 'column',
-              minHeight: '220px',
+              minHeight: '260px',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
                 <span style={{ fontFamily: 'var(--font-mono)', fontSize: '1.4rem', color: 'var(--accent)', opacity: 0.6 }}>{s.glyph}</span>
@@ -78,14 +78,23 @@ export default function Spaces() {
               <div style={{ fontFamily: 'var(--font-garamond)', fontSize: 'clamp(1.05rem,2vw,1.25rem)', fontStyle: 'italic', color: 'var(--text)', marginBottom: '0.35rem' }}>{s.name}</div>
               <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', color: 'var(--accent)', opacity: 0.45, letterSpacing: '0.06em', marginBottom: '0.9rem' }}>{s.sub}</div>
               <p style={{ fontSize: '0.85rem', color: 'var(--muted)', lineHeight: 1.6, margin: '0 0 auto', opacity: 0.8 }}>{s.desc}</p>
-              <div style={{ paddingTop: '1.25rem' }}>
+              {/* Enter link — always reserve space at bottom */}
+              <div style={{ paddingTop: '1.5rem', display: 'flex', alignItems: 'center', minHeight: '2.25rem' }}>
                 {s.href ? (
-                  <Link href={s.href} style={{
-                    display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                    fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
-                    textTransform: 'uppercase' as const, letterSpacing: '0.1em',
-                    color: 'var(--accent)', textDecoration: 'none', opacity: 0.85,
-                  }}>enter ↗</Link>
+                  <Link
+                    href={s.href}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+                      fontFamily: 'var(--font-mono)', fontSize: '0.7rem',
+                      textTransform: 'uppercase' as const, letterSpacing: '0.1em',
+                      color: 'var(--accent)', textDecoration: 'none', opacity: 0.85,
+                      borderBottom: '1px solid oklch(from var(--accent) l c h / 0.35)',
+                      paddingBottom: '1px',
+                      transition: 'opacity 0.15s',
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                    onMouseLeave={e => (e.currentTarget.style.opacity = '0.85')}
+                  >enter ↗</Link>
                 ) : (
                   <span style={{
                     fontFamily: 'var(--font-mono)', fontSize: '0.65rem',

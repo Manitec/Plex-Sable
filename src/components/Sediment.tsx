@@ -65,12 +65,13 @@ export default function Sediment() {
     }}>
       <div style={{ maxWidth: '820px' }}>
 
-        {/* Header row */}
+        {/* Header row — title left, tag strip right (scrollable) */}
         <div style={{
-          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-          gap: '1.5rem', marginBottom: '1.5rem', flexWrap: 'wrap' as const,
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+          gap: '1.5rem', marginBottom: '1.5rem',
         }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
+          {/* Title */}
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem', flexShrink: 0 }}>
             <h2 style={{ fontSize: 'clamp(1.1rem,2.5vw,1.5rem)', fontWeight: 400, fontStyle: 'italic', color: 'var(--text)', fontFamily: 'var(--font-garamond)', margin: 0 }}>sediment</h2>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase' as const, letterSpacing: '0.12em', color: 'var(--muted)', opacity: 0.5 }}>fragments · accumulation</span>
             {isLive && (
@@ -78,9 +79,20 @@ export default function Sediment() {
             )}
           </div>
 
-          {/* Tag filters */}
-          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' as const }}>
+          {/* Tag filters — single scrollable row, no wrap */}
+          <div style={{
+            display: 'flex', gap: '0.4rem',
+            overflowX: 'auto',
+            flexShrink: 1,
+            maxWidth: '55%',
+            paddingBottom: '2px',
+            scrollbarWidth: 'none' as const,
+          }}>
+            <style>{`
+              .sediment-tag-strip::-webkit-scrollbar { display: none; }
+            `}</style>
             <button
+              className="sediment-tag-strip"
               onClick={() => { setActiveTag(null); setExpanded(false); }}
               style={{
                 fontFamily: 'var(--font-mono)', fontSize: '0.6rem', textTransform: 'uppercase' as const,
@@ -88,6 +100,7 @@ export default function Sediment() {
                 border: '1px solid var(--border)', background: !activeTag ? 'var(--accent)' : 'transparent',
                 color: !activeTag ? 'var(--bg)' : 'var(--muted)', cursor: 'pointer',
                 opacity: !activeTag ? 1 : 0.55, transition: 'all 0.15s',
+                whiteSpace: 'nowrap' as const, flexShrink: 0,
               }}>all</button>
             {allTags.map(tag => (
               <button
@@ -99,6 +112,7 @@ export default function Sediment() {
                   border: '1px solid var(--border)', background: activeTag === tag ? 'var(--accent)' : 'transparent',
                   color: activeTag === tag ? 'var(--bg)' : 'var(--muted)', cursor: 'pointer',
                   opacity: activeTag === tag ? 1 : 0.45, transition: 'all 0.15s',
+                  whiteSpace: 'nowrap' as const, flexShrink: 0,
                 }}>{tag}</button>
             ))}
           </div>
