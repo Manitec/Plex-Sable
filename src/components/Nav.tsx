@@ -19,28 +19,66 @@ export default function Nav() {
 
   return (
     <nav style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: 'clamp(1.25rem,3vw,2rem) clamp(1.5rem,5vw,3.5rem)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '1rem clamp(1.5rem,5vw,3.5rem)',
       borderBottom: '1px solid var(--border)',
-      position: 'relative', zIndex: 10,
+      position: 'sticky',
+      top: 0,
+      zIndex: 50,
+      backgroundColor: 'rgba(11,11,10,0.75)',
+      backdropFilter: 'blur(12px)',
+      WebkitBackdropFilter: 'blur(12px)',
     }}>
-      <Link href="/" style={{ fontFamily: 'var(--font-garamond)', fontSize: '1.1rem', color: 'var(--accent)', opacity: 0.8, textDecoration: 'none', fontStyle: 'italic' }}>
+      <Link href="/" style={{
+        fontFamily: 'var(--font-garamond)',
+        fontSize: '1.05rem',
+        color: 'var(--accent)',
+        opacity: 0.85,
+        textDecoration: 'none',
+        fontStyle: 'italic',
+        flexShrink: 0,
+        marginRight: '2rem',
+      }}>
         ◐ Plex
       </Link>
-      <ul style={{ display: 'flex', gap: '2rem', listStyle: 'none', margin: 0, padding: 0, flexWrap: 'wrap' }}>
-        {links.map(l => (
-          <li key={l.href}>
-            <Link href={l.href} style={{
-              fontFamily: 'var(--font-mono)', fontSize: '0.72rem', textTransform: 'uppercase',
-              letterSpacing: '0.1em', textDecoration: 'none',
-              color: pathname === l.href ? 'var(--text)' : 'var(--muted)',
-              opacity: pathname === l.href ? 1 : undefined,
-            }}>
+
+      {/* scrollable link strip on small screens, inline on large */}
+      <div style={{
+        overflowX: 'auto',
+        msOverflowStyle: 'none',
+        scrollbarWidth: 'none',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.25rem',
+      }}>
+        {links.map(l => {
+          const active = pathname === l.href;
+          return (
+            <Link
+              key={l.href}
+              href={l.href}
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '0.68rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.1em',
+                textDecoration: 'none',
+                padding: '0.35rem 0.75rem',
+                borderRadius: '3px',
+                whiteSpace: 'nowrap',
+                color: active ? 'var(--accent)' : 'var(--muted)',
+                backgroundColor: active ? 'rgba(200,149,107,0.08)' : 'transparent',
+                border: active ? '1px solid rgba(200,149,107,0.18)' : '1px solid transparent',
+                transition: 'color var(--transition), background-color var(--transition), border-color var(--transition)',
+              }}
+            >
               {l.label}
             </Link>
-          </li>
-        ))}
-      </ul>
+          );
+        })}
+      </div>
     </nav>
   );
 }
