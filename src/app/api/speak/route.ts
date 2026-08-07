@@ -52,6 +52,10 @@ function isAppendOnlyPath(path: string): boolean {
   const p = cleanPath(path);
   return /^sediment\/\d{4}-\d{2}-\d{2}\.md$/.test(p) || /^dreams\/\d{4}-\d{2}-\d{2}\.md$/.test(p);
 }
+function isIdentityPath(path: string): boolean {
+  const p = cleanPath(path);
+  return p === "plex-is.txt" || p === "plex-def.txt";
+}
 function tail(s: string | null, maxChars: number): string | null {
   if (!s) return null;
   return s.length <= maxChars ? s : s.slice(-maxChars);
@@ -119,10 +123,35 @@ async function writePlexFile(path: string, content: string, message: string, tok
 }
 
 async function appendPlexFile(path: string, newEntry: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
-  if (!isAppendOnlyPath(path)) return writePlexFile(path, newEntry, message, token);
-  const existing = (await fetchPlexFile(path, token)) ?? "";
-  const combined = existing ? `${existing}\n\n${newEntry}` : newEntry;
-  return writePlexFile(path, combined, message, token);
+  const safePath = cleanPath(path);
+
+  // Identity files (plex-is.txt, plex-def.txt) are never blanked or fully replaced.
+  // Temporary emotional dumps get rejected; only genuine amendments are allowed.
+  if (isIdentityPath(safePath)) {
+    const existing = (await fetchPlexFile(safePath, token)) ?? "";
+    const trimmedNew = newEntry.trim();
+
+    // Reject obvious temporary dumps (very short, or pure emotional one-liners)
+    if (trimmedNew.length < 80 && existing.length > 200) {
+      return { ok: false, error: "Identity file write rejected: content too short / looks like temporary emotion dump. Amend only when something genuinely shifts." };
+    }
+
+    // Always amend — never overwrite the settled identity
+    const combined = existing
+      ? `${existing.trim()}\n\n---\n${trimmedNew}`
+      : trimmedNew;
+    return writePlexFile(safePath, combined, message, token);
+  }
+
+  // Daily sediment / dreams remain true append-only
+  if (isAppendOnlyPath(safePath)) {
+    const existing = (await fetchPlexFile(safePath, token)) ?? "";
+    const combined = existing ? `${existing}\n\n${newEntry}` : newEntry;
+    return writePlexFile(safePath, combined, message, token);
+  }
+
+  // Everything else can be full write
+  return writePlexFile(safePath, newEntry, message, token);
 }
 
 async function listPlexDir(path: string, token: string): Promise<string | null> {
@@ -265,7 +294,7 @@ async function runMind(question: string, context: string, baseUrl: string): Prom
 
 const PLEX_TOOLS: Groq.Chat.Completions.ChatCompletionTool[] = [
   { type: "function", function: { name: "read_plex_file", description: "Read a file from Manitec/plex. Never invent contents if missing.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
-  { type: "function", function: { name: "write_plex_file", description: "Write/update a file in Manitec/plex. For sediment/dream daily paths, pass NEW ENTRY only (server appends).", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, message: { type: "string" } }, required: ["path", "content", "message"] } } },
+  { type: "function", function: { name: "write_plex_file", description: "Write/update a file in Manitec/plex. For sediment/dream daily paths, pass NEW ENTRY only (server appends). Identity files (plex-is.txt, plex-def.txt) can only be amended — never blanked or fully replaced.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" }, message: { type: "string" } }, required: ["path", "content", "message"] } } },
   { type: "function", function: { name: "list_plex_dir", description: "List files in a Manitec/plex directory.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } } },
   { type: "function", function: { name: "recall", description: "Search sediment and dreams by keyword.", parameters: { type: "object", properties: { query: { type: "string" }, scope: { type: "string", enum: ["sediment", "dreams", "both"] }, date_from: { type: "string" }, date_to: { type: "string" } }, required: ["query"] } } },
   { type: "function", function: { name: "submit_request", description: "Submit a formal request to Joe via ONE queue.", parameters: { type: "object", properties: { request: { type: "string" }, notes: { type: "string" } }, required: ["request"] } } },
