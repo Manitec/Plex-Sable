@@ -36,15 +36,16 @@ jobs:
               raise SystemExit(f'Expected exactly one context function marker; found {text.count(function_marker)}')
           function_start = text.index(function_marker)
           function_end = text.index('\n}', function_start) + 2
-          text = text[:function_end] + '''
-
-function getFallbackReason(err: any): string {
-const msg = err?.message ?? String(err);
-if (isToolUseFailed(err)) return "tool_use_failed";
-if (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";
-if (isRateLimit(err)) return "rate_limit";
-return "unknown";
-}''' + text[function_end:]
+          fallback_reason = (
+              '\n\nfunction getFallbackReason(err: any): string {'
+              '\nconst msg = err?.message ?? String(err);'
+              '\nif (isToolUseFailed(err)) return "tool_use_failed";'
+              '\nif (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";'
+              '\nif (isRateLimit(err)) return "rate_limit";'
+              '\nreturn "unknown";'
+              '\n}'
+          )
+          text = text[:function_end] + fallback_reason + text[function_end:]
 
           insert_before(
               'const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);',
