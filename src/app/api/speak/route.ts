@@ -61,6 +61,14 @@ function isContextTooLong(err: any): boolean {
   const msg = err?.message ?? String(err);
   return msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413");
 }
+
+function getFallbackReason(err: any): string {
+const msg = err?.message ?? String(err);
+if (isToolUseFailed(err)) return "tool_use_failed";
+if (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";
+if (isRateLimit(err)) return "rate_limit";
+return "unknown";
+}
 function cleanPath(path: string): string {
   return path.replace(/^\/+/, "");
 }
@@ -518,7 +526,8 @@ async function callGroqWithTools(
     first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools: PLEX_TOOLS });
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
-      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);
+      console.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });
+const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);
       try {
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
@@ -628,7 +637,8 @@ async function callGroqWithTools(
     return { text: secondText, fallback: false, requestSubmitted };
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
-      const toolSummary = toolMessages
+      console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });
+const toolSummary = toolMessages
         .filter((m) => m.role === "tool")
         .map((m) => `Result: ${(m.content as string).slice(0, 400)}`)
         .join("\n");
@@ -773,7 +783,10 @@ export async function POST(req: NextRequest) {
 
     const fullPrompt = `${effectiveBasePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;
 
-    let response: string;
+    const historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);
+console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });
+
+let response: string;
     let fallback = false;
     let requestSubmitted: string | undefined;
 
