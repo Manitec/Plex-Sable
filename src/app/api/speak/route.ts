@@ -472,8 +472,13 @@ async function groqCall(groq: Groq, model: string, messages: Groq.Chat.Completio
   });
 }
 
-function buildFallbackMessages(history: any[], message: string, prefetchedContext?: string): Groq.Chat.Completions.ChatCompletionMessageParam[] {
-  const baseContent = PLEX_BASE_FALLBACK + PLEX_CONTEXT_MISSING_NOTE + FALLBACK_NO_TOOLS_NOTE;
+function buildFallbackMessages(
+  history: any[],
+  message: string,
+  prefetchedContext?: string,
+  liveBasePrompt?: string
+): Groq.Chat.Completions.ChatCompletionMessageParam[] {
+  const baseContent = (liveBasePrompt ?? PLEX_BASE_FALLBACK) + PLEX_CONTEXT_MISSING_NOTE + FALLBACK_NO_TOOLS_NOTE;
   const remainingBudget = Math.max(0, FALLBACK_SYSTEM_MAX_CHARS - baseContent.length);
   let systemContent = baseContent;
   if (prefetchedContext && remainingBudget > 200) systemContent += `\n\n## From your repository\n${prefetchedContext.slice(-remainingBudget)}`;
@@ -490,7 +495,8 @@ async function callGroqWithTools(
   message: string,
   token: string,
   prefetchedContext?: string,
-  baseUrl?: string
+  baseUrl?: string,
+  liveBasePrompt?: string
 ): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
   const groq = makeGroq();
   const resolvedBaseUrl = baseUrl ?? "http://localhost:3000";
@@ -512,7 +518,7 @@ async function callGroqWithTools(
     first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools: PLEX_TOOLS });
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
-      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext);
+      const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);
       try {
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
@@ -626,7 +632,7 @@ async function callGroqWithTools(
         .filter((m) => m.role === "tool")
         .map((m) => `Result: ${(m.content as string).slice(0, 400)}`)
         .join("\n");
-      const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext);
+      const fallbackMsgs = buildFallbackMessages(history, message, toolSummary || prefetchedContext, liveBasePrompt);
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
       const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
       const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
@@ -779,7 +785,7 @@ export async function POST(req: NextRequest) {
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
     } else {
-      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl);
+      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt);
       response = result.text;
       fallback = result.fallback;
       requestSubmitted = result.requestSubmitted;
