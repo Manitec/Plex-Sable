@@ -63,6 +63,8 @@ jobs:
           path.write_text(text)
 
       - name: Verify production build
+        env:
+          GROQ_API_KEY: build-placeholder
         run: npm install && npm run build
 
       - name: Commit route repair and remove this workflow
