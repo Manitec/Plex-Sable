@@ -32,34 +32,41 @@ jobs:
               text = text.replace(marker, addition + marker, 1)
 
           helper_marker = 'async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {'
-          helpers = '''function isActiveContextFileRequest(req: FileRequest | null): boolean {
-  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));
-}
-
-function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {
-  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;
-  if (mode === "operational" || mode === "synthesis") return true;
-  return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
-}
-
-'''
+          helpers = (
+              'function isActiveContextFileRequest(req: FileRequest | null): boolean {\n'
+              '  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));\n'
+              '}\n\n'
+              'function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {\n'
+              '  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;\n'
+              '  if (mode === "operational" || mode === "synthesis") return true;\n'
+              '  return /\\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\\b/i.test(message);\n'
+              '}\n\n'
+          )
           insert_before(helper_marker, helpers, 'routing helper')
 
-          old_prefetch = '''if (fileRequest && token) {
-prefetchedContext = await resolvePrefetch(fileRequest, token);
-}'''
-          new_prefetch = '''if (fileRequest && token && !isActiveContextFileRequest(fileRequest)) {
-prefetchedContext = await resolvePrefetch(fileRequest, token);
-}'''
+          old_prefetch = (
+              'if (fileRequest && token) {\n'
+              'prefetchedContext = await resolvePrefetch(fileRequest, token);\n'
+              '}'
+          )
+          new_prefetch = (
+              'if (fileRequest && token && !isActiveContextFileRequest(fileRequest)) {\n'
+              'prefetchedContext = await resolvePrefetch(fileRequest, token);\n'
+              '}'
+          )
           if text.count(old_prefetch) != 1:
               raise SystemExit(f'Expected exactly one prefetch block; found {text.count(old_prefetch)}')
           text = text.replace(old_prefetch, new_prefetch, 1)
 
-          signature_marker = '''  liveBasePrompt?: string
-): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'''
-          signature_replacement = '''  liveBasePrompt?: string,
-  tools?: Groq.Chat.Completions.ChatCompletionTool[]
-): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'''
+          signature_marker = (
+              '  liveBasePrompt?: string\n'
+              '): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'
+          )
+          signature_replacement = (
+              '  liveBasePrompt?: string,\n'
+              '  tools?: Groq.Chat.Completions.ChatCompletionTool[]\n'
+              '): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'
+          )
           if text.count(signature_marker) != 1:
               raise SystemExit(f'Expected exactly one Groq signature marker; found {text.count(signature_marker)}')
           text = text.replace(signature_marker, signature_replacement, 1)
