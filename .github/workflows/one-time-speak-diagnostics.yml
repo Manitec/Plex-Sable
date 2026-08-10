@@ -24,33 +24,50 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path('src/app/api/speak/route.ts')
           text = path.read_text()
 
-          replacements = [
-              (
-                  'function isContextTooLong(err: any): boolean {\nconst msg = err?.message ?? String(err);\nreturn msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413");\n}',
-                  'function isContextTooLong(err: any): boolean {\nconst msg = err?.message ?? String(err);\nreturn msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413");\n}\n\nfunction getFallbackReason(err: any): string {\nconst msg = err?.message ?? String(err);\nif (isToolUseFailed(err)) return "tool_use_failed";\nif (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";\nif (isRateLimit(err)) return "rate_limit";\nreturn "unknown";\n}'
-              ),
-              (
-                  'if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {\nconst fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);',
-                  'if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {\nconsole.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });\nconst fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);'
-              ),
-              (
-                  'if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {\nconst toolSummary = toolMessages',
-                  'if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {\nconsole.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });\nconst toolSummary = toolMessages'
-              ),
-              (
-                  'const fullPrompt = `${effectiveBasePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;\n\nlet response: string;',
-                  'const fullPrompt = `${effectiveBasePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;\nconst historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);\nconsole.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });\n\nlet response: string;'
-              ),
-          ]
+          def replace_one(pattern, replacement, label):
+              global text
+              text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+              if count != 1:
+                  raise SystemExit(f'Expected exactly one {label} insertion point; found {count}')
 
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'Expected source pattern not found: {old[:100]}')
-              text = text.replace(old, new, 1)
+          replace_one(
+              r'(function isContextTooLong\(err: any\): boolean \{\s*const msg = err\?\.message \?\? String\(err\);\s*return msg\.includes\("context_length"\) \|\| msg\.includes\("maximum context"\) \|\| msg\.includes\("too many tokens"\) \|\| msg\.includes\("413"\);\s*\})',
+              r'''\1
+
+function getFallbackReason(err: any): string {
+const msg = err?.message ?? String(err);
+if (isToolUseFailed(err)) return "tool_use_failed";
+if (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";
+if (isRateLimit(err)) return "rate_limit";
+return "unknown";
+}''',
+              'getFallbackReason'
+          )
+          replace_one(
+              r'(if \(isToolUseFailed\(err\) \|\| isRateLimit\(err\) \|\| isContextTooLong\(err\)\) \{\s*)(const fallbackMsgs = buildFallbackMessages\(history, message, prefetchedContext, liveBasePrompt\);)',
+              r'''\1console.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });
+\2''',
+              'primary fallback log'
+          )
+          replace_one(
+              r'(if \(isToolUseFailed\(err\) \|\| isRateLimit\(err\) \|\| isContextTooLong\(err\)\) \{\s*)(const toolSummary = toolMessages)',
+              r'''\1console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });
+\2''',
+              'post-tool fallback log'
+          )
+          replace_one(
+              r'(const fullPrompt = `\$\{effectiveBasePrompt\}\$\{plexContext\}\\n\\nYour current emotional sediment: \$\{sediment\}\$\{modeInstruction\}`;\s*)(let response: string;)',
+              r'''\1const historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);
+console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });
+
+\2''',
+              'context metrics log'
+          )
 
           path.write_text(text)
 
