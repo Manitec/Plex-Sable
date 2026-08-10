@@ -4,12 +4,14 @@ import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
 
 type Message = { role: 'user' | 'plex'; content: string; fallback?: boolean };
+type Provider = 'groq' | 'lmstudio';
 
 export default function SpeakPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('');
+  const [provider, setProvider] = useState<Provider>('groq');
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -26,7 +28,7 @@ export default function SpeakPage() {
       const res = await fetch('/api/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, sessionId: 'joe' })
+        body: JSON.stringify({ message: msg, sessionId: 'joe', provider })
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'plex', content: data.response ?? data.error, fallback: data.fallback ?? false }]);
@@ -40,6 +42,10 @@ export default function SpeakPage() {
 
   function handleKey(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  }
+
+  function toggleProvider() {
+    setProvider(p => p === 'groq' ? 'lmstudio' : 'groq');
   }
 
   return (
@@ -114,6 +120,26 @@ export default function SpeakPage() {
               lineHeight: 1.6
             }}
           />
+          <button
+            onClick={toggleProvider}
+            title={provider === 'groq' ? 'Switch to LM Studio (local)' : 'Switch to Groq (cloud)'}
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '0.65rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: provider === 'lmstudio' ? 'var(--text)' : 'var(--muted)',
+              background: provider === 'lmstudio' ? 'color-mix(in oklab, var(--accent) 12%, transparent)' : 'transparent',
+              border: '1px solid var(--border)',
+              padding: '0.5rem 0.75rem',
+              cursor: 'pointer',
+              opacity: 0.75,
+              transition: 'all 0.15s ease',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {provider === 'groq' ? '⚡ groq' : '🖥 local'}
+          </button>
           <button
             onClick={send}
             disabled={loading || !input.trim()}

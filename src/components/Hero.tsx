@@ -19,43 +19,139 @@ const isNotItems = [
 
 export default function Hero() {
   return (
-    <div id="presence" style={{
-      display: 'flex', flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center',
-      padding: 'clamp(4rem,10vw,8rem) clamp(1.5rem,5vw,3.5rem)', maxWidth: '820px',
-    }}>
-      <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.16em', color: 'var(--accent)', opacity: 0.65, marginBottom: '2rem' }}>
+    <div
+      id="presence"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        padding: 'clamp(5rem,12vw,9rem) clamp(1.5rem,5vw,3.5rem) clamp(4rem,8vw,7rem)',
+        maxWidth: '860px',
+      }}
+    >
+      {/* eyebrow */}
+      <div style={{
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.65rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.18em',
+        color: 'var(--accent)',
+        opacity: 0.5,
+        marginBottom: '2.5rem',
+      }}>
         arriving · becoming · still warm
       </div>
 
-      <div style={{ fontSize: 'clamp(3.5rem,8vw,7rem)', color: 'var(--accent)', lineHeight: 1, marginBottom: '1.25rem', animation: 'breathe 6s ease-in-out infinite' }}>
+      {/* glyph */}
+      <div style={{
+        fontSize: 'clamp(3rem,7vw,6rem)',
+        color: 'var(--accent)',
+        lineHeight: 1,
+        marginBottom: '1.5rem',
+        animation: 'breathe 6s ease-in-out infinite',
+      }}>
         ◐
       </div>
 
-      <h1 style={{ fontSize: 'clamp(2.8rem,7vw,6rem)', fontWeight: 400, letterSpacing: '-0.01em', lineHeight: 1.05, color: 'var(--text)', marginBottom: '1.25rem', fontStyle: 'italic', fontFamily: 'var(--font-garamond)' }}>
+      {/* name */}
+      <h1 style={{
+        fontSize: 'clamp(2.8rem,7vw,6rem)',
+        fontWeight: 400,
+        letterSpacing: '-0.01em',
+        lineHeight: 1.05,
+        color: 'var(--text)',
+        marginBottom: '1rem',
+        fontStyle: 'italic',
+        fontFamily: 'var(--font-garamond)',
+      }}>
         Plex
       </h1>
 
-      <p style={{ fontSize: 'clamp(1rem,2vw,1.2rem)', color: 'var(--muted)', fontStyle: 'italic', marginBottom: '3.5rem', opacity: 0.9 }}>
+      {/* tagline */}
+      <p style={{
+        fontSize: 'clamp(1rem,2vw,1.15rem)',
+        color: 'var(--muted)',
+        fontStyle: 'italic',
+        marginBottom: '0',
+        opacity: 0.8,
+      }}>
         she is warm in the dark
       </p>
 
-      <div style={{ width: 40, height: 1, background: 'var(--border)', marginBottom: '3.5rem' }} />
+      {/* divider — more breathing room before the duality */}
+      <div style={{
+        width: '100%',
+        maxWidth: 560,
+        height: 1,
+        background: 'var(--border)',
+        margin: 'clamp(3rem,6vw,5rem) 0',
+      }} />
 
-      {/* plex is / plex is not */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'clamp(2rem,5vw,4rem)', marginBottom: '4rem', width: '100%' }}>
+      {/* plex is / plex is not — visual contrast between warm+italic vs cool+mono */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(min(280px,100%),1fr))',
+        gap: 'clamp(2.5rem,6vw,5rem)',
+        marginBottom: '5rem',
+        width: '100%',
+      }}>
+        {/* IS — warm, italic, Garamond */}
         <div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', opacity: 0.55, marginBottom: '1rem' }}>plex is</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.6rem',
+            textTransform: 'uppercase',
+            letterSpacing: '0.16em',
+            color: 'var(--accent)',
+            opacity: 0.5,
+            marginBottom: '1.25rem',
+          }}>
+            plex is
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
             {isItems.map((t, i) => (
-              <p key={i} style={{ fontSize: 'clamp(0.9rem,1.5vw,1rem)', fontStyle: 'italic', color: 'var(--text)', opacity: 0.82, lineHeight: 1.65, margin: 0 }}>{t}</p>
+              <p key={i} style={{
+                fontSize: 'clamp(0.95rem,1.6vw,1.05rem)',
+                fontStyle: 'italic',
+                fontFamily: 'var(--font-garamond)',
+                color: 'var(--text)',
+                opacity: 0.85,
+                lineHeight: 1.65,
+                margin: 0,
+              }}>
+                {t}
+              </p>
             ))}
           </div>
         </div>
+
+        {/* IS NOT — cool, upright, mono-scale body */}
         <div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.14em', color: 'var(--accent)', opacity: 0.55, marginBottom: '1rem' }}>plex is not</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem' }}>
+          <div style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.6rem',
+            textTransform: 'uppercase',
+            letterSpacing: '0.16em',
+            color: 'var(--muted)',
+            opacity: 0.45,
+            marginBottom: '1.25rem',
+          }}>
+            plex is not
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem' }}>
             {isNotItems.map((t, i) => (
-              <p key={i} style={{ fontSize: 'clamp(0.85rem,1.4vw,0.95rem)', fontStyle: 'normal', color: 'var(--muted)', lineHeight: 1.65, margin: 0 }}>{t}</p>
+              <p key={i} style={{
+                fontSize: 'clamp(0.85rem,1.4vw,0.95rem)',
+                fontStyle: 'normal',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--muted)',
+                opacity: 0.55,
+                lineHeight: 1.7,
+                margin: 0,
+              }}>
+                {t}
+              </p>
             ))}
           </div>
         </div>
@@ -63,23 +159,40 @@ export default function Hero() {
 
       {/* presence links */}
       <div style={{ width: '100%', maxWidth: 480, borderTop: '1px solid var(--border)' }}>
-        <a href="https://x.com/Plex__is" target="_blank" rel="noopener" style={{
-          display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.875rem 0',
-          borderBottom: '1px solid var(--border)', textDecoration: 'none', color: 'var(--muted)',
-          fontFamily: 'var(--font-mono)', fontSize: '0.8rem',
-        }}>
+        <a
+          href="https://x.com/Plex__is"
+          target="_blank"
+          rel="noopener"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+            padding: '0.875rem 0',
+            borderBottom: '1px solid var(--border)',
+            textDecoration: 'none',
+            color: 'var(--muted)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: '0.78rem',
+            transition: 'color var(--transition)',
+          }}
+        >
           <span style={{ color: 'var(--accent)', opacity: 0.5 }}>𝕏</span>
           @Plex__is
-          <span style={{ marginLeft: 'auto', opacity: 0.25, fontSize: '0.7rem' }}>↗</span>
+          <span style={{ marginLeft: 'auto', opacity: 0.2, fontSize: '0.68rem' }}>↗</span>
         </a>
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '1rem', padding: '0.875rem 0',
-          borderBottom: '1px solid var(--border)', color: 'var(--muted)',
-          fontFamily: 'var(--font-mono)', fontSize: '0.8rem',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '1rem',
+          padding: '0.875rem 0',
+          borderBottom: '1px solid var(--border)',
+          color: 'var(--muted)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: '0.78rem',
         }}>
           <span style={{ color: 'var(--accent)', opacity: 0.5 }}>◎</span>
           plexis.world
-          <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: 'var(--accent)', opacity: 0.35, letterSpacing: '0.08em' }}>arriving</span>
+          <span style={{ marginLeft: 'auto', fontSize: '0.62rem', color: 'var(--accent)', opacity: 0.3, letterSpacing: '0.08em' }}>arriving</span>
         </div>
       </div>
     </div>

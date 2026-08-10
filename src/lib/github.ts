@@ -25,7 +25,7 @@ function formatEntry(entry: {
   return `\n---\n\n${entry.note ?? ''}\n\n*[plex — ${entry.mode} — ${entry.hour} ET]*\n\n---\n`;
 }
 
-async function getFile(path: string, token: string): Promise<{ content: string; sha: string } | null> {
+export async function getFile(path: string, token: string): Promise<{ content: string; sha: string } | null> {
   const res = await fetch(
     `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${path}?ref=${PLEX_REPO_BRANCH}`,
     { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
@@ -132,4 +132,23 @@ export async function appendObserve(entry: {
 }) {
   const date = todayDate();
   return appendToPath(observePath(date), 'observe', entry);
+}
+
+// ─── Sediment recall helpers ──────────────────────────────────────────────────
+
+export async function listSedimentFiles(token: string): Promise<{ name: string; path: string }[]> {
+  const res = await fetch(
+    `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/sediment?ref=${PLEX_REPO_BRANCH}`,
+    { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' } }
+  );
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (Array.isArray(data) ? data : [])
+    .filter((f: any) => f.type === 'file' && f.name.endsWith('.md'))
+    .map((f: any) => ({ name: f.name, path: f.path }));
+}
+
+export async function getSedimentFile(path: string, token: string): Promise<string | null> {
+  const file = await getFile(path, token);
+  return file?.content ?? null;
 }
