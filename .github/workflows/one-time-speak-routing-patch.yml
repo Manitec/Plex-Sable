@@ -1,0 +1,98 @@
+name: One-time Speak routing patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-speak-routing-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Patch context routing only
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('src/app/api/speak/route.ts')
+          text = path.read_text()
+
+          def insert_before(marker, addition, label):
+              global text
+              if text.count(marker) != 1:
+                  raise SystemExit(f'Expected exactly one {label} marker; found {text.count(marker)}')
+              text = text.replace(marker, addition + marker, 1)
+
+          helper_marker = 'async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {'
+          helpers = '''function isActiveContextFileRequest(req: FileRequest | null): boolean {
+  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));
+}
+
+function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {
+  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;
+  if (mode === "operational" || mode === "synthesis") return true;
+  return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
+}
+
+'''
+          insert_before(helper_marker, helpers, 'routing helper')
+
+          old_prefetch = '''if (fileRequest && token) {
+prefetchedContext = await resolvePrefetch(fileRequest, token);
+}'''
+          new_prefetch = '''if (fileRequest && token && !isActiveContextFileRequest(fileRequest)) {
+prefetchedContext = await resolvePrefetch(fileRequest, token);
+}'''
+          if text.count(old_prefetch) != 1:
+              raise SystemExit(f'Expected exactly one prefetch block; found {text.count(old_prefetch)}')
+          text = text.replace(old_prefetch, new_prefetch, 1)
+
+          signature_marker = '''  liveBasePrompt?: string
+): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'''
+          signature_replacement = '''  liveBasePrompt?: string,
+  tools?: Groq.Chat.Completions.ChatCompletionTool[]
+): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'''
+          if text.count(signature_marker) != 1:
+              raise SystemExit(f'Expected exactly one Groq signature marker; found {text.count(signature_marker)}')
+          text = text.replace(signature_marker, signature_replacement, 1)
+
+          old_primary_call = 'first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools: PLEX_TOOLS });'
+          new_primary_call = 'first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools });'
+          if text.count(old_primary_call) != 1:
+              raise SystemExit(f'Expected exactly one primary tool call; found {text.count(old_primary_call)}')
+          text = text.replace(old_primary_call, new_primary_call, 1)
+
+          mode_marker = 'const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;'
+          mode_addition = 'const activeTools = shouldUseTools(message, mode, fileRequest) ? PLEX_TOOLS : undefined;\n'
+          insert_before(mode_marker, mode_addition, 'active tools')
+
+          old_log = 'toolCount: PLEX_TOOLS.length'
+          new_log = 'toolCount: activeTools?.length ?? 0'
+          if text.count(old_log) != 1:
+              raise SystemExit(f'Expected exactly one tool-count log; found {text.count(old_log)}')
+          text = text.replace(old_log, new_log, 1)
+
+          old_route_call = 'const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt);'
+          new_route_call = 'const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools);'
+          if text.count(old_route_call) != 1:
+              raise SystemExit(f'Expected exactly one Speak route call; found {text.count(old_route_call)}')
+          text = text.replace(old_route_call, new_route_call, 1)
+
+          path.write_text(text)
+
+      - name: Commit route patch and remove workflow
+        run: |
+          git config user.name 'Manitec repair bot'
+          git config user.email '95106688+Manitec@users.noreply.github.com'
+          git rm .github/workflows/one-time-speak-routing-patch.yml
+          git add src/app/api/speak/route.ts
+          git commit -m 'fix(speak): gate tools and dedupe core prefetch'
+          git push origin main
