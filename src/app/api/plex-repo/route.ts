@@ -3,9 +3,24 @@ import { NextRequest, NextResponse } from 'next/server';
 const OWNER = 'Manitec';
 const REPO = 'plex';
 const BRANCH = 'main';
+const CANONICAL_SEDIMENT = 'sediment/';
+const DUPLICATE_SEDIMENT = 'plex/sediment/';
 
 function headers(token: string) {
   return { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+}
+
+function archiveGuard(action: string, path: string, sha?: string) {
+  if (path.startsWith(DUPLICATE_SEDIMENT)) {
+    return 'duplicate sediment path is quarantined; use sediment/';
+  }
+  if (path.startsWith(CANONICAL_SEDIMENT) && action === 'delete') {
+    return 'canonical sediment is append-only and cannot be deleted';
+  }
+  if (path.startsWith(CANONICAL_SEDIMENT) && action === 'write' && sha) {
+    return 'canonical sediment cannot be overwritten through the generic repo API';
+  }
+  return null;
 }
 
 export async function GET(req: NextRequest) {
@@ -23,17 +38,14 @@ export async function GET(req: NextRequest) {
   const data = await res.json();
 
   if (read === '1') {
-    // single file — decode content
     const content = Buffer.from(data.content ?? '', 'base64').toString('utf-8');
     return NextResponse.json({ content, sha: data.sha, path: data.path });
   }
 
-  // directory listing
   if (Array.isArray(data)) {
-    return NextResponse.json(data.map((f: any) => ({ name: f.name, path: f.path, type: f.type, sha: f.sha })));
+    return NextResponse.json(data.map((file: any) => ({ name: file.name, path: file.path, type: file.type, sha: file.sha })));
   }
 
-  // single file without read flag — return metadata
   return NextResponse.json({ name: data.name, path: data.path, type: 'file', sha: data.sha });
 }
 
@@ -45,6 +57,9 @@ export async function POST(req: NextRequest) {
   const { action, path, content, sha, message } = body;
 
   if (!path) return NextResponse.json({ error: 'path required' }, { status: 400 });
+
+  const guardError = archiveGuard(action, path, sha);
+  if (guardError) return NextResponse.json({ error: guardError }, { status: 403 });
 
   const url = `https://api.github.com/repos/${OWNER}/${REPO}/contents/${path}`;
 
