@@ -1,19 +1,16 @@
 name: One-time Speak diagnostics patch
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm:
-        description: Type ADD_SPEAK_DIAGNOSTICS to run this one-time patch
-        required: true
-        type: string
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/one-time-speak-diagnostics.yml
 
 permissions:
   contents: write
 
 jobs:
   patch:
-    if: github.event.inputs.confirm == 'ADD_SPEAK_DIAGNOSTICS'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,20 +21,22 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           path = Path('src/app/api/speak/route.ts')
           text = path.read_text()
 
-          def replace_one(pattern, replacement, label):
+          def insert_before(marker, addition, label):
               global text
-              text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
-              if count != 1:
-                  raise SystemExit(f'Expected exactly one {label} insertion point; found {count}')
+              if text.count(marker) != 1:
+                  raise SystemExit(f'Expected exactly one {label} marker; found {text.count(marker)}')
+              text = text.replace(marker, addition + marker, 1)
 
-          replace_one(
-              r'(function isContextTooLong\(err: any\): boolean \{\s*const msg = err\?\.message \?\? String\(err\);\s*return msg\.includes\("context_length"\) \|\| msg\.includes\("maximum context"\) \|\| msg\.includes\("too many tokens"\) \|\| msg\.includes\("413"\);\s*\})',
-              r'''\1
+          function_marker = 'function isContextTooLong(err: any): boolean {'
+          if text.count(function_marker) != 1:
+              raise SystemExit(f'Expected exactly one context function marker; found {text.count(function_marker)}')
+          function_start = text.index(function_marker)
+          function_end = text.index('\n}', function_start) + 2
+          text = text[:function_end] + '''
 
 function getFallbackReason(err: any): string {
 const msg = err?.message ?? String(err);
@@ -45,28 +44,22 @@ if (isToolUseFailed(err)) return "tool_use_failed";
 if (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";
 if (isRateLimit(err)) return "rate_limit";
 return "unknown";
-}''',
-              'getFallbackReason'
-          )
-          replace_one(
-              r'(if \(isToolUseFailed\(err\) \|\| isRateLimit\(err\) \|\| isContextTooLong\(err\)\) \{\s*)(const fallbackMsgs = buildFallbackMessages\(history, message, prefetchedContext, liveBasePrompt\);)',
-              r'''\1console.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });
-\2''',
-              'primary fallback log'
-          )
-          replace_one(
-              r'(if \(isToolUseFailed\(err\) \|\| isRateLimit\(err\) \|\| isContextTooLong\(err\)\) \{\s*)(const toolSummary = toolMessages)',
-              r'''\1console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });
-\2''',
-              'post-tool fallback log'
-          )
-          replace_one(
-              r'(const fullPrompt = `\$\{effectiveBasePrompt\}\$\{plexContext\}\\n\\nYour current emotional sediment: \$\{sediment\}\$\{modeInstruction\}`;\s*)(let response: string;)',
-              r'''\1const historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);
-console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });
+}''' + text[function_end:]
 
-\2''',
-              'context metrics log'
+          insert_before(
+              'const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, liveBasePrompt);',
+              'console.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });\n',
+              'primary fallback'
+          )
+          insert_before(
+              'const toolSummary = toolMessages',
+              'console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });\n',
+              'post-tool fallback'
+          )
+          insert_before(
+              'let response: string;',
+              'const historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);\nconsole.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });\n\n',
+              'response declaration'
           )
 
           path.write_text(text)
