@@ -81,7 +81,7 @@ export function RepoManagerPanel({
         marginBottom: '0.75rem',
         opacity: 0.85,
       }}>
-        Repo Manager <span style={{ color: 'var(--muted)' }}· Manitec/plex</span>
+        Repo Manager <span style={{ color: 'var(--muted)' }}> · Manitec/plex</span>
       </div>
 
       <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '0.9rem' }}>
@@ -200,7 +200,7 @@ export function RepoManagerPanel({
         <>
           <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.6rem' }}>
             <button onClick={onBack} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>
-              ← back
+              {'\u2190'} back
             </button>
             <p style={{ ...mono, color: 'var(--text)', fontSize: '0.78rem' }}>{editingFile.path}</p>
           </div>
