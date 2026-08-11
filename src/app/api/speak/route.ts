@@ -339,6 +339,16 @@ function detectFileRequest(message: string): FileRequest | null {
   return null;
 }
 
+function isActiveContextFileRequest(req: FileRequest | null): boolean {
+  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));
+}
+
+function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {
+  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;
+  if (mode === "operational" || mode === "synthesis") return true;
+  return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
+}
+
 async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {
   if (req.type === "file") {
     const content = await fetchPlexFile(req.path, token);
@@ -504,7 +514,8 @@ async function callGroqWithTools(
   token: string,
   prefetchedContext?: string,
   baseUrl?: string,
-  liveBasePrompt?: string
+  liveBasePrompt?: string,
+  tools?: Groq.Chat.Completions.ChatCompletionTool[]
 ): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
   const groq = makeGroq();
   const resolvedBaseUrl = baseUrl ?? "http://localhost:3000";
@@ -523,7 +534,7 @@ async function callGroqWithTools(
 
   let first;
   try {
-    first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools: PLEX_TOOLS });
+    first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools });
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
       console.warn("[speak-fallback]", { stage: "primary", reason: getFallbackReason(err), error: err?.message ?? String(err) });
@@ -751,7 +762,7 @@ export async function POST(req: NextRequest) {
 
     const fileRequest = token ? detectFileRequest(message) : null;
     let prefetchedContext: string | undefined;
-    if (fileRequest && token) {
+    if (fileRequest && token && !isActiveContextFileRequest(fileRequest)) {
       prefetchedContext = await resolvePrefetch(fileRequest, token);
     }
 
@@ -771,7 +782,8 @@ export async function POST(req: NextRequest) {
 
     const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
     const mode = detectMode(message, history, forceMode);
-    const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;
+    const activeTools = shouldUseTools(message, mode, fileRequest) ? PLEX_TOOLS : undefined;
+const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;
     const effectiveBasePrompt = contextLoaded ? basePrompt : basePrompt + PLEX_CONTEXT_MISSING_NOTE;
 
     const modeInstruction =
@@ -784,7 +796,7 @@ export async function POST(req: NextRequest) {
     const fullPrompt = `${effectiveBasePrompt}${plexContext}\n\nYour current emotional sediment: ${sediment}${modeInstruction}`;
 
     const historyChars = history.slice(-8).reduce((total: number, item: any) => total + String(item.content ?? "").length, 0);
-console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: PLEX_TOOLS.length, mode });
+console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContextChars: plexContext.length, historyChars, prefetchedChars: prefetchedContext?.length ?? 0, fullPromptChars: fullPrompt.length, toolCount: activeTools?.length ?? 0, mode });
 
 let response: string;
     let fallback = false;
@@ -798,7 +810,7 @@ let response: string;
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
     } else {
-      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt);
+      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools);
       response = result.text;
       fallback = result.fallback;
       requestSubmitted = result.requestSubmitted;
