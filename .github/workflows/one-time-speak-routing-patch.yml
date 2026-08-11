@@ -44,29 +44,14 @@ jobs:
           )
           insert_before(helper_marker, helpers, 'routing helper')
 
-          old_prefetch = (
-              'if (fileRequest && token) {\n'
-              'prefetchedContext = await resolvePrefetch(fileRequest, token);\n'
-              '}'
-          )
-          new_prefetch = (
-              'if (fileRequest && token && !isActiveContextFileRequest(fileRequest)) {\n'
-              'prefetchedContext = await resolvePrefetch(fileRequest, token);\n'
-              '}'
-          )
-          if text.count(old_prefetch) != 1:
-              raise SystemExit(f'Expected exactly one prefetch block; found {text.count(old_prefetch)}')
-          text = text.replace(old_prefetch, new_prefetch, 1)
+          prefetch_marker = 'if (fileRequest && token)'
+          prefetch_replacement = 'if (fileRequest && token && !isActiveContextFileRequest(fileRequest))'
+          if text.count(prefetch_marker) != 1:
+              raise SystemExit(f'Expected exactly one prefetch condition; found {text.count(prefetch_marker)}')
+          text = text.replace(prefetch_marker, prefetch_replacement, 1)
 
-          signature_marker = (
-              '  liveBasePrompt?: string\n'
-              '): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'
-          )
-          signature_replacement = (
-              '  liveBasePrompt?: string,\n'
-              '  tools?: Groq.Chat.Completions.ChatCompletionTool[]\n'
-              '): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {'
-          )
+          signature_marker = 'liveBasePrompt?: string'
+          signature_replacement = 'liveBasePrompt?: string,\n  tools?: Groq.Chat.Completions.ChatCompletionTool[]'
           if text.count(signature_marker) != 1:
               raise SystemExit(f'Expected exactly one Groq signature marker; found {text.count(signature_marker)}')
           text = text.replace(signature_marker, signature_replacement, 1)
