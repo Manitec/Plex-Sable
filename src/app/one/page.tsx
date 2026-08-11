@@ -1,5 +1,5 @@
 // src/app/one/page.tsx
-// ONE Shell — sidebar layout
+// ONE Shell — sidebar layout 
 // Views: ◐ one | ⋯ session | ◫ spaces
 // Nav removed. Footer kept. Session strip live across all views.
 // Visual update Aug 2 2026 — balanced two-column ONE layout, spaces scaffold
@@ -1566,7 +1566,16 @@ export default function PlexSable() {
             )}
           </button>
         ))}
-      </nav>
+     <a
+  href="/one/projects"
+  style={{
+    ...mono, padding: '0.35rem 0.85rem', borderRadius: '999px',
+    color: 'var(--muted)', border: '1px solid transparent',
+    textDecoration: 'none',
+  }}
+>
+  ◈ projects
+</a> </nav>
 
       <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
         {view === 'one'     && <OneView />}
