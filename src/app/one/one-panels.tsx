@@ -1,0 +1,1 @@
+New client-side React module exporting RepoManagerPanel and ActivityLogPanel. It preserves the current props, zone navigation, file open/create/delete controls, editor/save controls, and lazy activity-log loading/show-hide behavior. No existing file is modified in this commit.
