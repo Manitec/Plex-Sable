@@ -50,11 +50,18 @@ jobs:
               raise SystemExit(f'Expected exactly one prefetch condition; found {text.count(prefetch_marker)}')
           text = text.replace(prefetch_marker, prefetch_replacement, 1)
 
+          function_start = text.find('async function callGroqWithTools(')
+          if function_start == -1:
+              raise SystemExit('callGroqWithTools function not found')
+          function_end = text.find('): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {', function_start)
+          if function_end == -1:
+              raise SystemExit('callGroqWithTools signature end not found')
+          signature = text[function_start:function_end]
           signature_marker = 'liveBasePrompt?: string'
-          signature_replacement = 'liveBasePrompt?: string,\n  tools?: Groq.Chat.Completions.ChatCompletionTool[]'
-          if text.count(signature_marker) != 1:
-              raise SystemExit(f'Expected exactly one Groq signature marker; found {text.count(signature_marker)}')
-          text = text.replace(signature_marker, signature_replacement, 1)
+          if signature.count(signature_marker) != 1:
+              raise SystemExit(f'Expected exactly one live base prompt in Groq signature; found {signature.count(signature_marker)}')
+          signature = signature.replace(signature_marker, 'liveBasePrompt?: string,\n  tools?: Groq.Chat.Completions.ChatCompletionTool[]', 1)
+          text = text[:function_start] + signature + text[function_end:]
 
           old_primary_call = 'first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools: PLEX_TOOLS });'
           new_primary_call = 'first = await groqCall(groq, PRIMARY_MODEL, primaryMessages, { max_tokens: 800, tools });'
