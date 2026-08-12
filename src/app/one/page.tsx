@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Footer from '@/components/Footer';
+import { RepoManagerPanel, ActivityLogPanel, type RepoFile } from './one-panels';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -939,95 +940,54 @@ function OneView() {
           )}
     
           {/* Repo Manager */}
-          <section style={panelStyle}>
-            <div style={eyeStyle}>Repo Manager — Manitec/plex</div>
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
-              {ZONES.map(z => (
-                <button key={z.key} onClick={() => { setActiveZone(z.key); setEditingFile(null); }}
-                  style={{
-                    ...mono, padding: '0.3rem 0.7rem', borderRadius: '999px',
-                    background: activeZone === z.key ? 'var(--accent)' : 'transparent',
-                    color: activeZone === z.key ? 'var(--bg)' : 'var(--muted)',
-                    border: '1px solid var(--border)', cursor: 'pointer',
-                  }}>{z.label}</button>
-              ))}
-            </div>
-            {repoMsg && <p style={{ ...muted, marginBottom: '0.8rem', color: 'var(--accent)' }}>{repoMsg}</p>}
-            {!editingFile ? (
-              <>
-                {repoLoading ? <p style={muted}>loading...</p> : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', marginBottom: '1.25rem' }}>
-                    {repoFiles.length === 0 && <p style={muted}>empty.</p>}
-                    {repoFiles.map((f: any) => (
-                      <div key={f.path} style={{ display: 'flex', gap: '1rem', alignItems: 'center', padding: '0.35rem 0', borderBottom: '1px solid var(--border)' }}>
-                        <button onClick={() => openFile(f)} style={{ ...mono, color: 'var(--text)', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', flex: 1 }}>
-                          {f.type === 'dir' ? '📁 ' : ''}{f.name}
-                        </button>
-                        {f.type === 'file' && (
-                          <button onClick={() => deleteFile(f)} style={{ ...mono, color: 'var(--muted)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.6rem' }}>delete</button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <button onClick={() => setNewFileOpen(!newFileOpen)} style={btnBase}>+ new file</button>
-                {newFileOpen && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.8rem', maxWidth: 480 }}>
-                    <input placeholder="filename.md" value={newFileName} onChange={e => setNewFileName(e.target.value)}
-                      style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', outline: 'none', borderRadius: '0.4rem' }} />
-                    <textarea placeholder="content..." value={newFileContent} onChange={e => setNewFileContent(e.target.value)} rows={4}
-                      style={{ ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.35rem 0.6rem', resize: 'vertical', outline: 'none', borderRadius: '0.4rem' }} />
-                    <button onClick={createFile} disabled={editSaving} style={btnAccent}>create</button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '0.6rem' }}>
-                  <button onClick={() => setEditingFile(null)} style={{ ...muted, background: 'none', border: 'none', cursor: 'pointer' }}>← back</button>
-                  <p style={{ ...mono, color: 'var(--text)' }}>{editingFile.path}</p>
-                </div>
-                <textarea value={editContent} onChange={e => setEditContent(e.target.value)} rows={18}
-                  style={{ width: '100%', maxWidth: 720, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.7rem', resize: 'vertical', outline: 'none', lineHeight: 1.7, borderRadius: '0.5rem' }} />
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '0.6rem', alignItems: 'center' }}>
-                  <button onClick={saveFile} disabled={editSaving} style={btnAccent}>{editSaving ? 'saving...' : 'save'}</button>
-                  {repoMsg && <p style={{ ...muted, color: 'var(--accent)' }}>{repoMsg}</p>}
-                </div>
-              </>
-            )}
-          </section>
+          <RepoManagerPanel
+            zones={ZONES}
+            activeZone={activeZone}
+            files={repoFiles as RepoFile[]}
+            loading={repoLoading}
+            editingFile={editingFile}
+            editContent={editContent}
+            newFileName={newFileName}
+            newFileContent={newFileContent}
+            newFileOpen={newFileOpen}
+            saving={editSaving}
+            message={repoMsg}
+            panelStyle={panelStyle}
+            mono={mono}
+            muted={muted}
+            buttonStyle={btnBase}
+            accentButtonStyle={btnAccent}
+            onZoneChange={(zone) => {
+              setActiveZone(zone);
+              setEditingFile(null);
+              loadZone(zone);
+            }}
+            onOpenFile={openFile}
+            onDeleteFile={deleteFile}
+            onBack={() => setEditingFile(null)}
+            onEditContentChange={setEditContent}
+            onSave={saveFile}
+            onNewFileOpenChange={setNewFileOpen}
+            onNewFileNameChange={setNewFileName}
+            onNewFileContentChange={setNewFileContent}
+            onCreateFile={createFile}
+          />
 
           {/* Activity Log */}
-          <section style={panelStyle}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <div style={eyeStyle}>Activity Log</div>
-              <button
-                onClick={() => { const next = !logOpen; setLogOpen(next); if (next && log.length === 0) fetchLog(); }}
-                style={{ ...mono, fontSize: '0.65rem', padding: '0.25rem 0.7rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}
-              >
-                {logOpen ? 'hide' : 'show'}
-              </button>
-            </div>
-            {logOpen && (
-              logLoading
-                ? <p style={muted}>loading...</p>
-                : log.length === 0
-                  ? <p style={muted}>no log entries yet.</p>
-                  : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      {log.map((entry: any) => (
-                        <div key={entry.id} style={{ padding: '0.6rem 0.8rem', borderLeft: '2px solid var(--border)', background: 'oklch(from var(--bg) calc(l + 0.01) c h)', borderRadius: '0 0.4rem 0.4rem 0' }}>
-                          <p style={{ color: 'var(--text)', fontSize: '0.825rem', lineHeight: 1.6, marginBottom: '0.2rem' }}>{entry.entry ?? '(no entry)'}</p>
-                          <p style={{ ...muted, fontSize: '0.6rem', opacity: 0.55 }}>
-                            <span style={{ color: 'var(--accent)' }}>{entry.author ?? 'unknown'}</span>
-                            {entry.timestamp ? ` · ${fmtTime(entry.timestamp)}` : ''}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  )
-            )}
-          </section>
+          <ActivityLogPanel
+            open={logOpen}
+            loading={logLoading}
+            entries={log}
+            panelStyle={panelStyle}
+            mono={mono}
+            muted={muted}
+            buttonStyle={btnBase}
+            onToggle={() => {
+              const next = !logOpen;
+              setLogOpen(next);
+              if (next && log.length === 0) fetchLog();
+            }}
+          />
         </div>
 
         {/* ── Right column ── */}

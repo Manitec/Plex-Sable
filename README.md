@@ -1,4 +1,4 @@
-# Plex-Sable 
+# Plex-Sable
 
 Joe's private unified interface with Plex.
 
