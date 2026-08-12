@@ -1169,165 +1169,213 @@ function OneView() {
 }
 
 // ─── View: Session ────────────────────────────────────────────────────────────
-
-function SessionView() {
+function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, startedAt: number | null) => void }) {
+  const [phase, setPhase] = useState<SessionPhase>('start');
+  const [intent, setIntent] = useState('');
+  const [session, setSession] = useState<SessionState | null>(null);
   const [messages, setMessages] = useState<SessionMsg[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [session, setSession] = useState<SessionState | null>(null);
-  const [phase, setPhase] = useState<SessionPhase>('start');
-  const [intent, setIntent] = useState('');
-  const [startedAt, setStartedAt] = useState<number | null>(null);
-  const [voice, setVoice] = useState<VoiceChannel>('plex');
+  const [proposedTags, setProposedTags] = useState<Record<string, string>>({});
+  const [approvedTags, setApprovedTags] = useState<Record<string, string>>({});
+  const [committed, setCommitted] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (bottomRef.current) bottomRef.current.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const setPhaseWithNotify = (p: SessionPhase, startedAt: number | null = null) => {
+    setPhase(p);
+    onPhaseChange(p, startedAt);
+  };
 
   async function startSession() {
     if (!intent.trim()) return;
     setLoading(true);
-    try {
-      const res = await fetch('/api/session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'start', intent }),
-      });
-      const data = await res.json();
-      setSession(data.session);
-      setPhase('active');
-      setStartedAt(Date.now());
-      if (data.opening) setMessages([{ role: 'plex', content: data.opening }]);
-    } catch {}
+    const res = await fetch('/api/one/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start', intent }),
+    });
+    const data = await res.json();
+    setSession({ id: data.sessionId, intent, status: 'open', recallTagsLoaded: data.recallTagsLoaded ?? [] });
+    if (data.plexReply) setMessages([{ role: 'plex', content: data.plexReply }]);
+    setPhaseWithNotify('active', Date.now());
     setLoading(false);
   }
 
-  async function send() {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput('');
-    setLoading(true);
-    setMessages(m => [...m, { role: 'joe', content: text }]);
-    try {
-      const res = await fetch('/api/session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'message', sessionId: session?.id, message: text, voice }),
-      });
-      const data = await res.json();
-      if (data.reply) setMessages(m => [...m, { role: 'plex', content: data.reply }]);
-    } catch {
-      setMessages(m => [...m, { role: 'plex', content: '(unavailable)' }]);
-    }
+  async function sendMessage() {
+    if (!input.trim() || !session) return;
+    const userMsg: SessionMsg = { role: 'joe', content: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput(''); setLoading(true);
+    const res = await fetch('/api/one/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'message', sessionId: session.id, content: userMsg.content }),
+    });
+    const data = await res.json();
+    if (data.plexReply) setMessages(prev => [...prev, { role: 'plex', content: data.plexReply }]);
     setLoading(false);
   }
 
   async function closeSession() {
-    setPhase('closing');
+    if (!session) return;
+    setPhaseWithNotify('closing', null);
     setLoading(true);
-    try {
-      const res = await fetch('/api/session', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'close', sessionId: session?.id }),
-      });
-      const data = await res.json();
-      if (data.closing) setMessages(m => [...m, { role: 'plex', content: data.closing }]);
-    } catch {}
-    setPhase('review');
-    setLoading(false);
+    const res = await fetch('/api/one/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'close', sessionId: session.id }),
+    });
+    const data = await res.json();
+    const proposed = data.proposedTags ?? {};
+    setProposedTags(proposed); setApprovedTags(proposed);
+    setPhaseWithNotify('review', null); setLoading(false);
   }
 
-  const color = VOICE_COLORS[voice];
+  async function commitTags() {
+    if (Object.keys(approvedTags).length > 0) {
+      setLoading(true);
+      await fetch('/api/one/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'commit_recall', tags: approvedTags }),
+      });
+      setLoading(false);
+    }
+    setCommitted(true);
+  }
+
+  function toggleTag(key: string) {
+    setApprovedTags(prev => {
+      const next = { ...prev };
+      if (next[key]) delete next[key]; else next[key] = proposedTags[key];
+      return next;
+    });
+  }
 
   if (phase === 'start') return (
-    <div style={{ maxWidth: 560, margin: '0 auto', paddingTop: '3rem' }}>
-      <div style={eyeStyle}>New Session</div>
-      <h2 style={{ fontFamily: 'var(--font-serif, Georgia, serif)', fontSize: 'clamp(1.5rem,3vw,2.5rem)', fontWeight: 400, marginBottom: '1.5rem', color: 'var(--text)', lineHeight: 1.15 }}>
-        What brings you here?
-      </h2>
+    <div style={{ maxWidth: 560 }}>
+      <p style={{ ...labelStyle, marginBottom: '0.4rem' }}>Session</p>
+      <h2 style={{ color: 'var(--text)', fontSize: '1.4rem', fontWeight: 400, fontStyle: 'italic', marginBottom: '0.5rem' }}>What are we working on?</h2>
+      <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.5rem' }}>Plex will load matching recall context and stay scoped for this session.</p>
       <textarea
-        placeholder="what do you want to work on or talk through..."
+        className="w-full bg-[#1c1b19] border border-[#2e2d2b] rounded-lg p-4 text-sm text-[#cdccca] placeholder-[#5a5957] resize-none focus:outline-none focus:border-[#4f98a3] transition-colors"
+        rows={4}
+        placeholder="e.g. plex-sable session panel build, joesfaves proxy fix..."
         value={intent}
         onChange={e => setIntent(e.target.value)}
-        onKeyDown={e => e.key === 'Enter' && e.metaKey && startSession()}
-        rows={4}
-        style={{ width: '100%', ...mono, background: 'oklch(from var(--bg) calc(l + 0.02) c h)', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.75rem 1rem', resize: 'none', outline: 'none', lineHeight: 1.6, marginBottom: '1rem', borderRadius: '0.5rem' }}
-        onFocus={e => (e.target.style.borderColor = 'var(--accent)')}
-        onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+        onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) startSession(); }}
       />
-      <button onClick={startSession} disabled={loading || !intent.trim()}
-        style={{ ...mono, padding: '0.6rem 1.5rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', opacity: loading || !intent.trim() ? 0.4 : 1, borderRadius: '0.5rem' }}>
-        {loading ? 'starting...' : 'begin session →'}
-      </button>
+      <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          onClick={startSession} disabled={loading || !intent.trim()}
+          className="px-5 py-2 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors"
+        >
+          {loading ? 'Starting…' : 'Start Session'}
+        </button>
+      </div>
+    </div>
+  );
+
+  if (phase === 'review' || phase === 'closing') return (
+    <div style={{ maxWidth: 560 }}>
+      {phase === 'closing' ? (
+        <p style={muted}>Plex is reviewing the session…</p>
+      ) : committed ? (
+        <div>
+          <p style={{ ...labelStyle }}>Session closed</p>
+          <p style={{ ...muted, lineHeight: 1.6 }}>Recall tags {Object.keys(approvedTags).length > 0 ? 'committed to meta/recall.json.' : 'skipped.'}</p>
+          <button onClick={() => { setPhaseWithNotify('start', null); setSession(null); setMessages([]); setCommitted(false); setIntent(''); }}
+            style={{ ...mono, marginTop: '1.5rem', background: 'none', border: '1px solid var(--border)', color: 'var(--muted)', padding: '0.35rem 0.8rem', cursor: 'pointer' }}>
+            ← new session
+          </button>
+        </div>
+      ) : (
+        <div>
+          <p style={{ ...labelStyle, marginBottom: '0.4rem' }}>Session · Close</p>
+          <h2 style={{ color: 'var(--text)', fontSize: '1.2rem', fontWeight: 400, marginBottom: '0.4rem' }}>Proposed recall tags</h2>
+          <p style={{ ...muted, lineHeight: 1.6, marginBottom: '1.25rem' }}>Toggle off any you don't want saved.</p>
+          {Object.keys(proposedTags).length === 0 ? (
+            <p style={{ ...muted, marginBottom: '1.25rem' }}>No new tags proposed.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
+              {Object.entries(proposedTags).map(([key, value]) => (
+                <div key={key} onClick={() => toggleTag(key)}
+                  className={`cursor-pointer rounded-lg border p-3 transition-colors ${approvedTags[key] ? 'border-[#4f98a3] bg-[#1c2e30]' : 'border-[#2e2d2b] bg-[#1c1b19] opacity-50'}`}>
+                  <p className="text-xs font-mono text-[#4f98a3] mb-1">{key}</p>
+                  <p className="text-xs text-[#7a7974]">{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <button onClick={() => setCommitted(true)} style={{ ...mono, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', opacity: 0.5 }}>Skip</button>
+            <button onClick={commitTags} disabled={loading}
+              className="px-5 py-2 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors">
+              {loading ? 'Saving…' : `Save ${Object.keys(approvedTags).length} tag${Object.keys(approvedTags).length !== 1 ? 's' : ''}`}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 8rem)', maxWidth: 720, margin: '0 auto' }}>
-      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-        <span style={{ ...muted, opacity: 0.5 }}>voice:</span>
-        {VOICES.map(v => (
-          <button key={v.key} onClick={() => setVoice(v.key)}
-            style={{
-              ...mono, padding: '0.25rem 0.6rem', borderRadius: '999px',
-              background: voice === v.key ? VOICE_COLORS[v.key] : 'transparent',
-              color: voice === v.key ? 'var(--bg)' : 'var(--muted)',
-              border: `1px solid ${voice === v.key ? VOICE_COLORS[v.key] : 'var(--border)'}`,
-              cursor: 'pointer', fontSize: '0.65rem',
-            }}>{v.label}</button>
-        ))}
-        {phase === 'active' && (
-          <button onClick={closeSession} style={{ ...mono, marginLeft: 'auto', padding: '0.25rem 0.7rem', fontSize: '0.65rem', background: 'transparent', color: 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '999px' }}>
-            end session
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - 180px)', minHeight: 400 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        marginBottom: '1rem', paddingBottom: '0.75rem', borderBottom: '1px solid var(--border)' }}>
+        <div>
+          <p style={{ ...labelStyle, marginBottom: '0.2rem' }}>Session · Active</p>
+          <p style={{ color: 'var(--text)', fontSize: '0.875rem', fontWeight: 500 }}>{session?.intent}</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          {session && session.recallTagsLoaded.length > 0 && (
+            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              {session.recallTagsLoaded.map(tag => (
+                <span key={tag} className="text-xs bg-[#1c2e30] text-[#4f98a3] px-2 py-0.5 rounded-full font-mono">{tag}</span>
+              ))}
+            </div>
+          )}
+          <button onClick={closeSession}
+            className="text-xs px-3 py-1.5 border border-[#393836] hover:border-[#5a5957] text-[#7a7974] hover:text-[#cdccca] rounded-lg transition-colors">
+            Close Session
           </button>
-        )}
+        </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingBottom: '1rem' }}>
-        {messages.map((m, i) => (
-          <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: m.role === 'joe' ? 'flex-end' : 'flex-start', gap: '0.2rem' }}>
-            <span style={{ ...mono, fontSize: '0.55rem', color: 'var(--muted)', opacity: 0.5, letterSpacing: '0.08em' }}>
-              {m.role === 'joe' ? 'joe' : voice}
-            </span>
-            <div style={{
-              maxWidth: '80%', padding: '0.65rem 0.9rem', lineHeight: 1.7, fontSize: '0.9rem',
-              background: m.role === 'joe' ? 'oklch(from var(--bg) calc(l + 0.04) c h)' : 'oklch(from var(--bg) calc(l + 0.015) c h)',
-              borderLeft: m.role === 'plex' ? `2px solid ${color}` : 'none',
-              color: 'var(--text)', borderRadius: '0.5rem',
-            }}>{m.content}</div>
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.75rem', paddingBottom: '0.5rem' }}>
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'joe' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[75%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === 'joe' ? 'bg-[#1e3538] text-[#cdccca]' : 'bg-[#1c1b19] text-[#cdccca] border border-[#2e2d2b]'}`}>
+              {msg.role === 'plex' && <p className="text-xs text-[#4f98a3] mb-1 font-mono">plex</p>}
+              <p className="whitespace-pre-wrap">{msg.content}</p>
+            </div>
           </div>
         ))}
-        {loading && <div style={{ ...muted, opacity: 0.4, letterSpacing: '0.2em' }}>…</div>}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-[#1c1b19] border border-[#2e2d2b] rounded-xl px-4 py-2.5">
+              <p className="text-xs text-[#4f98a3] mb-1 font-mono">plex</p>
+              <p className="text-xs text-[#5a5957]">thinking…</p>
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
-      {phase === 'active' && (
-        <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border)' }}>
-          <input
-            value={input}
+      <div style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: 'auto' }}>
+        <div className="flex gap-3 items-end">
+          <textarea
+            className="flex-1 bg-[#1c1b19] border border-[#2e2d2b] rounded-lg px-4 py-2.5 text-sm text-[#cdccca] placeholder-[#5a5957] resize-none focus:outline-none focus:border-[#4f98a3] transition-colors"
+            rows={2} placeholder="Message Plex…" value={input}
             onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && send()}
-            placeholder="speak..."
-            disabled={loading}
-            style={{ flex: 1, ...mono, background: 'transparent', border: '1px solid var(--border)', color: 'var(--text)', padding: '0.5rem 0.8rem', outline: 'none', transition: 'border-color 120ms', borderRadius: '0.5rem' }}
-            onFocus={e => (e.target.style.borderColor = color)}
-            onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
           />
-          <button onClick={send} disabled={loading || !input.trim()}
-            style={{ ...mono, padding: '0.5rem 0.9rem', background: input.trim() ? color : 'transparent', color: input.trim() ? 'var(--bg)' : 'var(--muted)', border: '1px solid var(--border)', cursor: 'pointer', opacity: loading ? 0.4 : 1, transition: 'all 120ms', borderRadius: '0.5rem' }}>
-            ↑
+          <button onClick={sendMessage} disabled={loading || !input.trim()}
+            className="px-4 py-2.5 bg-[#4f98a3] hover:bg-[#227f8b] disabled:opacity-40 disabled:cursor-not-allowed text-[#0e0e0c] text-sm font-medium rounded-lg transition-colors shrink-0">
+            Send
           </button>
         </div>
-      )}
-
-      {phase === 'review' && (
-        <div style={{ paddingTop: '1rem', borderTop: '1px solid var(--border)', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <span style={{ ...muted, opacity: 0.6 }}>session closed.</span>
-          <button onClick={() => { setPhase('start'); setMessages([]); setSession(null); setIntent(''); setStartedAt(null); }}
-            style={{ ...mono, padding: '0.35rem 0.8rem', background: 'var(--accent)', color: 'var(--bg)', border: 'none', cursor: 'pointer', borderRadius: '0.5rem' }}>
-            new session
-          </button>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
