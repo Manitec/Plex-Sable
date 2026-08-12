@@ -1169,7 +1169,11 @@ function OneView() {
 }
 
 // ─── View: Session ────────────────────────────────────────────────────────────
-function SessionView() {
+function SessionView({
+  onPhaseChange,
+}: {
+  onPhaseChange: (p: SessionPhase, startedAt?: number | null) => void;
+}) {
   const [phase, setPhase] = useState<SessionPhase>('start');
   const [intent, setIntent] = useState('');
   const [session, setSession] = useState<SessionState | null>(null);
@@ -1185,7 +1189,7 @@ function SessionView() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const setPhaseWithNotify = (p: SessionPhase, startedAt: number | null = null) => {
+ const setPhaseWithNotify = (p: SessionPhase, startedAt: number | null = null) => {
     setPhase(p);
     onPhaseChange(p, startedAt);
   };
@@ -1587,7 +1591,14 @@ export default function PlexSable() {
 
       <main style={{ flex: 1, padding: '1.5rem', overflowY: 'auto' }}>
         {view === 'one'     && <OneView />}
-        {view === 'session' && <SessionView />}
+       {view === 'session' && (
+  <SessionView
+    onPhaseChange={(p, startedAtArg) => {
+      setPhase(p);
+      if (startedAtArg !== undefined) setStartedAt(startedAtArg);
+    }}
+  />
+)}
         {view === 'spaces'  && <SpacesView />}
       </main>
 
