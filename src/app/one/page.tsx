@@ -1169,7 +1169,7 @@ function OneView() {
 }
 
 // ─── View: Session ────────────────────────────────────────────────────────────
-function SessionView({ onPhaseChange }: { onPhaseChange: (p: SessionPhase, startedAt: number | null) => void }) {
+function SessionView() {
   const [phase, setPhase] = useState<SessionPhase>('start');
   const [intent, setIntent] = useState('');
   const [session, setSession] = useState<SessionState | null>(null);
