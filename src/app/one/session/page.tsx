@@ -37,9 +37,10 @@ export default function SessionPage() {
 
   // Resume an existing open session from /one/session?id=<sessionId>.
   useEffect(() => {
-    const sessionId = new URLSearchParams(window.location.search).get('id');
-    if (!sessionId) return;
+    const requestedSessionId = new URLSearchParams(window.location.search).get('id');
+    if (!requestedSessionId) return;
 
+    const sessionId = requestedSessionId;
     let cancelled = false;
 
     async function resumeSession() {
