@@ -5,15 +5,16 @@
  * This file is browser-layer context only — never define her identity here.
  *
  * Fallback chain:
- *   Groq 70b → Groq 8b → Cerebras 70b → Cerebras 8b → HF Inference (free) → OpenRouter :free
+ *   Groq 120b → Groq 20b → Cerebras 70b → Cerebras 8b → HF Inference (free) → OpenRouter :free
  */
 
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL      = "llama-3.3-70b-versatile";
+// Groq free/dev tier shut down llama-3.3-70b-versatile + llama-3.1-8b-instant on 2026-08-16.
+export const PRIMARY_MODEL      = "openai/gpt-oss-120b";
 export const VISION_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL         = "llama-3.1-8b-instant";
+export const FAST_MODEL         = "openai/gpt-oss-20b";
 export const CEREBRAS_MODEL     = "llama-3.3-70b";
 export const CEREBRAS_FAST      = "llama-3.1-8b";
 export const HF_MODEL           = "meta-llama/Llama-3.1-8B-Instruct"; // auto-routed by HF
@@ -270,12 +271,12 @@ export function makeGroq(): Groq {
   return new Groq({ apiKey: process.env.GROQ_API_KEY });
 }
 
-// ── Rate / quota error detection ──────────────────────────────────────────────
+// ── Rate / quota / missing-model error detection ──────────────────────────────
 function isQuotaError(err: any): boolean {
   const status  = err?.status ?? err?.response?.status;
   const message = String(err?.message ?? "");
   return (
-    status === 429 || status === 413
+    status === 429 || status === 413 || status === 404
     || message.includes("rate_limit")
     || message.includes("rate limit")
     || message.includes("token")
@@ -285,6 +286,9 @@ function isQuotaError(err: any): boolean {
     || message.includes("upstream")
     || message.includes("402")
     || status === 402
+    || message.includes("model_not_found")
+    || message.includes("does not exist")
+    || message.includes("you do not have access")
   );
 }
 
@@ -367,7 +371,7 @@ export async function completeWithFallback(
   temperature = 0.75
 ): Promise<{ text: string; provider: string; model: string }> {
 
-  // 1 — Groq 70b
+  // 1 — Groq primary (gpt-oss-120b)
   try {
     const res = await groq.chat.completions.create({
       model: PRIMARY_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -375,11 +379,11 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: PRIMARY_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 70b quota → waiting before Groq 8b');
+    console.warn('[fallback] Groq primary unavailable → waiting before Groq fast');
     await waitForRetry(err);
   }
 
-  // 2 — Groq 8b
+  // 2 — Groq fast (gpt-oss-20b)
   try {
     const res = await groq.chat.completions.create({
       model: FAST_MODEL, messages, temperature, max_tokens: maxTokens,
@@ -387,7 +391,7 @@ export async function completeWithFallback(
     return { text: res.choices[0].message.content?.trim() ?? '', provider: 'groq', model: FAST_MODEL };
   } catch (err: any) {
     if (!isQuotaError(err)) throw err;
-    console.warn('[fallback] Groq 8b quota → waiting before Cerebras 70b');
+    console.warn('[fallback] Groq fast unavailable → waiting before Cerebras 70b');
     await waitForRetry(err);
   }
 

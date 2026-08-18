@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
 
     const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
     const completion = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: 'openai/gpt-oss-120b',
       messages: [
         { role: 'system', content: WITNESS_PROMPT },
         { role: 'user', content: confession.trim() },
