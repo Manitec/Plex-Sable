@@ -8,8 +8,9 @@ import { makeGroq } from "@/lib/plex-identity";
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
 const PLEX_REPO_BRANCH = "main";
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-const FALLBACK_MODEL = "llama-3.1-8b-instant";
+// Groq free/dev tier shut down llama-3.3-70b-versatile + llama-3.1-8b-instant on 2026-08-16.
+const PRIMARY_MODEL = "openai/gpt-oss-120b";
+const FALLBACK_MODEL = "openai/gpt-oss-20b";
 const LM_STUDIO_BASE = process.env.LM_STUDIO_URL ?? "http://localhost:1234/v1";
 const LM_STUDIO_MODEL = process.env.LM_STUDIO_MODEL ?? "Plex-Nyhex-Q4";
 
@@ -51,7 +52,8 @@ function stripThinkTags(text: string): string {
 }
 function isRateLimit(err: any): boolean {
   const msg = err?.message ?? String(err);
-  return msg.includes("429") || msg.includes("413") || msg.includes("rate_limit_exceeded");
+  return msg.includes("429") || msg.includes("413") || msg.includes("rate_limit_exceeded")
+    || msg.includes("model_not_found") || msg.includes("does not exist") || msg.includes("you do not have access");
 }
 function isToolUseFailed(err: any): boolean {
   const msg = err?.message ?? String(err);
@@ -66,6 +68,7 @@ function getFallbackReason(err: any): string {
 const msg = err?.message ?? String(err);
 if (isToolUseFailed(err)) return "tool_use_failed";
 if (msg.includes("context_length") || msg.includes("maximum context") || msg.includes("too many tokens") || msg.includes("413")) return "context_too_long";
+if (msg.includes("model_not_found") || msg.includes("does not exist")) return "model_not_found";
 if (isRateLimit(err)) return "rate_limit";
 return "unknown";
 }
