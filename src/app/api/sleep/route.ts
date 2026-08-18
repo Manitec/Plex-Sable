@@ -167,11 +167,11 @@ async function groqComplete(systemPrompt: string, userContent: string, temperatu
   };
 
   try {
-    return await tryModel('llama-3.3-70b-versatile', max_tokens);
+    return await tryModel('openai/gpt-oss-120b', max_tokens);
   } catch (err: any) {
     const msg = err?.message ?? '';
-    if (msg.includes('429') || msg.includes('rate_limit_exceeded')) {
-      return await tryModel('llama-3.1-8b-instant', Math.min(max_tokens, 400));
+    if (msg.includes('429') || msg.includes('rate_limit_exceeded') || msg.includes('model_not_found') || msg.includes('does not exist')) {
+      return await tryModel('openai/gpt-oss-20b', Math.min(max_tokens, 400));
     }
     throw err;
   }
