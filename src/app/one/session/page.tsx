@@ -35,6 +35,55 @@ export default function SessionPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Resume an existing open session from /one/session?id=<sessionId>.
+  useEffect(() => {
+    const sessionId = new URLSearchParams(window.location.search).get('id');
+    if (!sessionId) return;
+
+    let cancelled = false;
+
+    async function resumeSession() {
+      setLoading(true);
+
+      try {
+        const res = await fetch(`/api/one/session?id=${encodeURIComponent(sessionId)}`);
+        const data = await res.json();
+        const saved = data.session;
+
+        if (!saved || cancelled) return;
+
+        setSession({
+          id: saved.id,
+          intent: saved.intent ?? '',
+          status: saved.status ?? 'open',
+          recallTagsLoaded: saved.recallTagsLoaded ?? [],
+        });
+        setIntent(saved.intent ?? '');
+        setMessages(
+          (saved.messages ?? []).map((message: Message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+          }))
+        );
+
+        // Closed sessions return to the normal start state for now because the
+        // stored document retains tag names but not the full review values.
+        setPhase(saved.status === 'open' ? 'active' : 'start');
+      } catch {
+        // Leave the normal start screen available if the saved session cannot load.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    resumeSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function startSession() {
     if (!intent.trim()) return;
     setLoading(true);
@@ -87,7 +136,7 @@ export default function SessionPage() {
     const data = await res.json();
     const proposed = data.proposedTags ?? {};
     setProposedTags(proposed);
-    setApprovedTags(proposed); // default all approved
+    setApprovedTags(proposed);
     setPhase('review');
     setLoading(false);
   }
@@ -115,8 +164,6 @@ export default function SessionPage() {
       return next;
     });
   }
-
-  // --- RENDER ---
 
   if (phase === 'start') {
     return (
@@ -213,10 +260,8 @@ export default function SessionPage() {
     );
   }
 
-  // Active session
   return (
     <div className="min-h-screen bg-[#0e0e0c] text-[#cdccca] flex flex-col">
-      {/* Header */}
       <div className="border-b border-[#1e1d1b] px-5 py-3 flex items-center justify-between shrink-0">
         <div>
           <p className="text-xs text-[#5a5957] uppercase tracking-widest">ONE · Session</p>
@@ -241,7 +286,6 @@ export default function SessionPage() {
         </div>
       </div>
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === 'joe' ? 'justify-end' : 'justify-start'}`}>
@@ -270,7 +314,6 @@ export default function SessionPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
       <div className="border-t border-[#1e1d1b] px-5 py-3 shrink-0">
         <div className="flex gap-3 items-end">
           <textarea
