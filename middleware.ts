@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from 'next/server';
 
 const COOKIE_NAME = 'plex_sable_auth';
@@ -26,7 +25,13 @@ function isAuthorizedSleepRequest(request: NextRequest): boolean {
 function denyUnauthenticatedRequest(request: NextRequest): NextResponse {
   if (isApiRequest(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-@@ -19,18 +35,22 @@
+  }
+
+  const loginUrl = new URL('/login', request.url);
+  const next = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  loginUrl.searchParams.set('next', next);
+
+  return NextResponse.redirect(loginUrl);
 }
 
 export function middleware(request: NextRequest) {
