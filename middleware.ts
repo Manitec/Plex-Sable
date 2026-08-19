@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const COOKIE_NAME = 'plex_sable_auth';
+const COOKIE_NAME = 'plex_session';
 
 function isApiRequest(request: NextRequest): boolean {
   return request.nextUrl.pathname.startsWith('/api/');
@@ -9,7 +9,8 @@ function isApiRequest(request: NextRequest): boolean {
 function isAuthorizedSleepRequest(request: NextRequest): boolean {
   if (
     request.method !== 'POST' ||
-    request.nextUrl.pathname !== '/api/sleep'
+    (request.nextUrl.pathname !== '/api/sleep' &&
+      request.nextUrl.pathname !== '/api/dream/run')
   ) {
     return false;
   }
@@ -28,9 +29,7 @@ function denyUnauthenticatedRequest(request: NextRequest): NextResponse {
   }
 
   const loginUrl = new URL('/login', request.url);
-  const next = `${request.nextUrl.pathname}${request.nextUrl.search}`;
-  loginUrl.searchParams.set('next', next);
-
+  loginUrl.searchParams.set('next', request.nextUrl.pathname);
   return NextResponse.redirect(loginUrl);
 }
 
@@ -50,7 +49,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: [
-    '/((?!login|api/login|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
-  ],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 };
