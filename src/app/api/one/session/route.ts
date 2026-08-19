@@ -46,7 +46,9 @@ function matchRecallTags(
 }
 
 // Load session message history from one_sessions subcollection
-async function loadSessionHistory(sessionId: string): Promise<{ role: string; content: string }[]> {
+async function loadSessionHistory(
+  sessionId: string
+): Promise<{ role: string; content: string }[]> {
   return safeGet(async () => {
     const snap = await getDocs(
       query(
@@ -67,13 +69,17 @@ async function callSpeak(
   message: string,
   sessionId: string,
   history: { role: string; content: string }[] = [],
-  forceMode?: string
+  forceMode?: string,
+  sessionCookie = ''
 ): Promise<string> {
   try {
     const origin = getOrigin();
     const res = await fetch(`${origin}/api/speak`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+      },
       body: JSON.stringify({
         message,
         sessionId,
@@ -98,7 +104,10 @@ export async function GET(req: NextRequest) {
       const snap = await getDoc(doc(db, 'one_sessions', sessionId));
       if (!snap.exists()) return null;
       const msgs = await getDocs(
-        query(collection(db, 'one_sessions', sessionId, 'messages'), orderBy('createdAt', 'asc'))
+        query(
+          collection(db, 'one_sessions', sessionId, 'messages'),
+          orderBy('createdAt', 'asc')
+        )
       );
       return {
         id: snap.id,
@@ -122,10 +131,13 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const { action } = body;
+  const sessionCookie = req.headers.get('cookie') ?? '';
 
   // ── Start a new session ─────────────────────────────────────────────────────
   if (action === 'start') {
-    if (!body.intent) return NextResponse.json({ error: 'missing intent' }, { status: 400 });
+    if (!body.intent) {
+      return NextResponse.json({ error: 'missing intent' }, { status: 400 });
+    }
 
     const allTags = await fetchRecallTags();
     const matchedTags = matchRecallTags(body.intent, allTags);
@@ -148,7 +160,12 @@ export async function POST(req: NextRequest) {
       }), null
     );
 
-    if (!sessionRef) return NextResponse.json({ error: 'failed to create session' }, { status: 500 });
+    if (!sessionRef) {
+      return NextResponse.json(
+        { error: 'failed to create session' },
+        { status: 500 }
+      );
+    }
 
     // Fix 2: warm, present opening — not a cold ops brief
     const openingPrompt = [
@@ -158,7 +175,13 @@ export async function POST(req: NextRequest) {
       `Acknowledge what you're here to work on. If you have relevant recall context, surface it briefly. Then ask the one question that would move things forward. Be yourself — direct, warm where it's earned, not performatively professional.`,
     ].filter(Boolean).join('\n\n');
 
-    const plexReply = await callSpeak(openingPrompt, sessionRef.id, [], 'session');
+    const plexReply = await callSpeak(
+      openingPrompt,
+      sessionRef.id,
+      [],
+      'session',
+      sessionCookie
+    );
 
     if (plexReply) {
       await safeGet(() =>
@@ -178,11 +201,15 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // ── Send a message ───────────────────────────────────────────────────────────
+  // ── Send a message ─────────────────────────────────────────────────────────
   if (action === 'message') {
     const { sessionId, content } = body;
-    if (!sessionId || !content)
-      return NextResponse.json({ error: 'missing sessionId or content' }, { status: 400 });
+    if (!sessionId || !content) {
+      return NextResponse.json(
+        { error: 'missing sessionId or content' },
+        { status: 400 }
+      );
+    }
 
     // Fix 1: load history from one_sessions before storing the new message
     const history = await loadSessionHistory(sessionId);
@@ -198,7 +225,13 @@ export async function POST(req: NextRequest) {
 
     // Pass full history + new message to speak
     const historyWithNew = [...history, { role: 'joe', content }];
-    const plexReply = await callSpeak(content, sessionId, historyWithNew);
+    const plexReply = await callSpeak(
+      content,
+      sessionId,
+      historyWithNew,
+      undefined,
+      sessionCookie
+    );
 
     if (plexReply) {
       await safeGet(() =>
@@ -211,21 +244,27 @@ export async function POST(req: NextRequest) {
     }
 
     await safeGet(() =>
-      updateDoc(doc(db, 'one_sessions', sessionId), { updatedAt: serverTimestamp() }), null
+      updateDoc(doc(db, 'one_sessions', sessionId), {
+        updatedAt: serverTimestamp()
+      }), null
     );
 
     return NextResponse.json({ ok: true, plexReply });
   }
 
-  // ── Close session ────────────────────────────────────────────────────────────
+  // ── Close session ──────────────────────────────────────────────────────────
   if (action === 'close') {
     const { sessionId } = body;
-    if (!sessionId)
+    if (!sessionId) {
       return NextResponse.json({ error: 'missing sessionId' }, { status: 400 });
+    }
 
     const msgs = await safeGet(async () => {
       const snap = await getDocs(
-        query(collection(db, 'one_sessions', sessionId, 'messages'), orderBy('createdAt', 'asc'))
+        query(
+          collection(db, 'one_sessions', sessionId, 'messages'),
+          orderBy('createdAt', 'asc')
+        )
       );
       return snap.docs.map(d => d.data());
     }, []);
@@ -239,13 +278,17 @@ export async function POST(req: NextRequest) {
       `Review this session transcript and propose 1-3 recall tags for future sessions. Short keyword (1-3 words, hyphenated) and a dense one-sentence value each. Return ONLY valid JSON: {"tag-name": "value", ...}\n\nTranscript:\n${transcript.slice(0, 4000)}`,
       sessionId,
       msgs.map((m: any) => ({ role: m.role, content: m.content })),
-      'session'
+      'session',
+      sessionCookie
     );
+
     if (tagReply) {
       try {
         const jsonMatch = tagReply.match(/\{[\s\S]*\}/);
         if (jsonMatch) proposedTags = JSON.parse(jsonMatch[0]);
-      } catch { /* non-fatal */ }
+      } catch {
+        /* non-fatal */
+      }
     }
 
     await safeGet(() =>
@@ -260,16 +303,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, proposedTags });
   }
 
-  // ── Commit recall tags ───────────────────────────────────────────────────────
+  // ── Commit recall tags ─────────────────────────────────────────────────────
   if (action === 'commit_recall') {
     const { tags } = body;
-    if (!tags || typeof tags !== 'object')
+    if (!tags || typeof tags !== 'object') {
       return NextResponse.json({ error: 'missing tags' }, { status: 400 });
+    }
 
     const ghToken = process.env.GITHUB_TOKEN;
-    if (!ghToken) return NextResponse.json({ error: 'no github token' }, { status: 500 });
+    if (!ghToken) {
+      return NextResponse.json({ error: 'no github token' }, { status: 500 });
+    }
 
-    const apiBase = 'https://api.github.com/repos/Manitec-HQ/Manitec-Dashboard/contents/meta/recall.json';
+    const apiBase =
+      'https://api.github.com/repos/Manitec-HQ/Manitec-Dashboard/contents/meta/recall.json';
+
     const headers = {
       Authorization: `token ${ghToken}`,
       'Content-Type': 'application/json',
@@ -282,7 +330,10 @@ export async function POST(req: NextRequest) {
         Buffer.from(current.content, 'base64').toString('utf-8')
       );
       const updated = { ...existingContent, ...tags };
-      const encoded = Buffer.from(JSON.stringify(updated, null, 2)).toString('base64');
+      const encoded = Buffer.from(
+        JSON.stringify(updated, null, 2)
+      ).toString('base64');
+
       await fetch(apiBase, {
         method: 'PUT',
         headers,
@@ -293,7 +344,10 @@ export async function POST(req: NextRequest) {
         })
       });
     } catch {
-      return NextResponse.json({ error: 'github write failed' }, { status: 500 });
+      return NextResponse.json(
+        { error: 'github write failed' },
+        { status: 500 }
+      );
     }
 
     return NextResponse.json({ ok: true });
