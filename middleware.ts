@@ -9,7 +9,7 @@ function isApiRequest(request: NextRequest): boolean {
 function isAuthorizedSleepRequest(request: NextRequest): boolean {
   if (
     request.method !== 'POST' ||
-    request.nextUrl.pathname !== '/api/sleep'
+    !['/api/sleep', '/api/dream/run'].includes(request.nextUrl.pathname)
   ) {
     return false;
   }
