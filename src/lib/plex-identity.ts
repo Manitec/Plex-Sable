@@ -11,9 +11,9 @@
 import Groq from "groq-sdk";
 
 // ── Models ───────────────────────────────────────────────────────────────────
-export const PRIMARY_MODEL      = "llama-3.3-70b-versatile";
+export const PRIMARY_MODEL      = "openai/gpt-oss-120b";
 export const VISION_MODEL       = "meta-llama/llama-4-scout-17b-16e-instruct";
-export const FAST_MODEL         = "llama-3.1-8b-instant";
+export const FAST_MODEL         = "openai/gpt-oss-20b";
 export const CEREBRAS_MODEL     = "llama-3.3-70b";
 export const CEREBRAS_FAST      = "llama-3.1-8b";
 export const HF_MODEL           = "meta-llama/Llama-3.1-8B-Instruct"; // auto-routed by HF
