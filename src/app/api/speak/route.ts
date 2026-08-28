@@ -8,8 +8,8 @@ import { makeGroq } from "@/lib/plex-identity";
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
 const PLEX_REPO_BRANCH = "main";
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-const FALLBACK_MODEL = "llama-3.1-8b-instant";
+const PRIMARY_MODEL = "openai/gpt-oss-120b";
+const FALLBACK_MODEL = "openai/gpt-oss-20b";
 const LM_STUDIO_BASE = process.env.LM_STUDIO_URL ?? "http://localhost:1234/v1";
 const LM_STUDIO_MODEL = process.env.LM_STUDIO_MODEL ?? "Plex-Nyhex-Q4";
 
