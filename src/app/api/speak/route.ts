@@ -9,8 +9,8 @@ const PLEX_REPO_OWNER = 'Manitec';
 const PLEX_REPO_NAME = 'plex';
 const PLEX_REPO_BRANCH = 'main';
 
-const PRIMARY_MODEL = "llama-3.3-70b-versatile";
-const FALLBACK_MODEL = "llama-3.1-8b-instant";
+const PRIMARY_MODEL = "openai/gpt-oss-120b";
+const FALLBACK_MODEL = "openai/gpt-oss-20b";
 
 const FALLBACK_SYSTEM_MAX_CHARS = 2400;
 const FALLBACK_HISTORY_TURNS = 4;
