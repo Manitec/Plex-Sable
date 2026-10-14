@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { makeGroq } from "@/lib/plex-identity";
+import { selectSessionHistory, toModelHistoryRole, type SessionHistorySelection } from "@/lib/session-history";
 
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
@@ -504,7 +505,7 @@ function buildFallbackMessages(
   let systemContent = baseContent;
   if (prefetchedContext && remainingBudget > 200) systemContent += `\n\n## From your repository\n${prefetchedContext.slice(-remainingBudget)}`;
   const recentHistory = history.slice(-FALLBACK_HISTORY_TURNS * 2).map((m: any) => ({
-    role: m.role === "plex" ? ("assistant" as const) : ("user" as const),
+    role: toModelHistoryRole(m.role),
     content: (m.content as string).slice(0, 500),
   }));
   return [{ role: "system", content: systemContent }, ...recentHistory, { role: "user", content: message }];
@@ -529,7 +530,7 @@ async function callGroqWithTools(
   const primaryMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: effectivePrompt },
     ...history.slice(-8).map((m: any) => ({
-      role: m.role === "plex" ? ("assistant" as const) : ("user" as const),
+      role: toModelHistoryRole(m.role),
       content: m.content as string,
     })),
     { role: "user", content: message },
@@ -740,6 +741,13 @@ export async function POST(req: NextRequest) {
     const { message: rawMessage, sessionId = "joe", overrideHistory, forceMode, provider = "groq" } = await req.json();
     if (!rawMessage) return NextResponse.json({ error: "Message required" }, { status: 400 });
 
+    let historySelection: SessionHistorySelection;
+    try {
+      historySelection = selectSessionHistory(overrideHistory);
+    } catch {
+      return NextResponse.json({ error: "Invalid overrideHistory: expected supported roles and string content" }, { status: 400 });
+    }
+
     const message = String(rawMessage).slice(0, 4000);
     const safeSessionId = /^[a-zA-Z0-9_-]{1,64}$/.test(sessionId) ? sessionId : "joe";
 
@@ -752,9 +760,9 @@ export async function POST(req: NextRequest) {
     // Direct sub-persona access via ?voice=nyx|hex|mani
     const voiceParam = req.nextUrl.searchParams.get("voice");
     if (voiceParam && voiceParam !== "plex" && VOICE_PROMPTS[voiceParam]) {
-      const subHistory = (overrideHistory ?? []).map((m: any) => ({
-        role: (m.role === "plex" || m.role === "assistant") ? ("assistant" as const) : ("user" as const),
-        content: m.content as string,
+      const subHistory = (historySelection.kind === "override" ? historySelection.messages : []).map((m) => ({
+        role: toModelHistoryRole(m.role),
+        content: m.content,
       }));
       const reply = await callSubPersona(voiceParam, message, subHistory);
       return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
@@ -771,8 +779,8 @@ export async function POST(req: NextRequest) {
 
     const db = getAdminDb();
     let history: any[];
-    if (overrideHistory && Array.isArray(overrideHistory)) {
-      history = overrideHistory;
+    if (historySelection.kind === "override") {
+      history = historySelection.messages;
     } else {
       const sessionSnap = await db.doc(`plex_sessions/${safeSessionId}`).get();
       history = sessionSnap.exists ? sessionSnap.data()?.messages ?? [] : [];
@@ -808,7 +816,7 @@ let response: string;
     if (provider === "lmstudio") {
       const lmMessages: { role: string; content: string }[] = [
         { role: "system", content: fullPrompt },
-        ...history.slice(-8).map((m: any) => ({ role: m.role === "plex" ? "assistant" : "user", content: m.content as string })),
+        ...history.slice(-8).map((m: any) => ({ role: toModelHistoryRole(m.role), content: m.content as string })),
         { role: "user", content: message },
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
@@ -819,7 +827,7 @@ let response: string;
       requestSubmitted = result.requestSubmitted;
     }
 
-    if (!overrideHistory) {
+    if (historySelection.kind === "stored") {
       const updatedMessages = [...history, { role: "user", content: message }, { role: "plex", content: response }];
       await db.doc(`plex_sessions/${safeSessionId}`).set(
         { messages: updatedMessages, updatedAt: FieldValue.serverTimestamp(), fallback, contextLoaded, baseLoaded },
