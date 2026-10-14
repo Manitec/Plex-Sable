@@ -2,17 +2,17 @@ name: Session history contract
 
 on:
   push:
-    branches:
-      - main
-      - fix/plex-history-role-guard
+    branches: [main, fix/plex-history-role-guard]
   pull_request:
-    branches:
-      - main
-      - fix/plex-history-role-guard
+    branches: [main, fix/plex-history-role-guard]
+
+permissions:
+  contents: read
 
 jobs:
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,3 +21,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node scripts/test-session-history.mjs
+      - run: node scripts/test-speak-history.mjs
+      - run: npx --no-install tsc --noEmit
