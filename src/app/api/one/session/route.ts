@@ -45,23 +45,22 @@ function matchRecallTags(
   return matched;
 }
 
-// Load session message history from one_sessions subcollection
+// Fetch the newest bounded window, then restore chronological model order.
+// Read failures must propagate: an unreadable thread is not an empty thread.
 async function loadSessionHistory(
   sessionId: string
 ): Promise<{ role: string; content: string }[]> {
-  return safeGet(async () => {
-    const snap = await getDocs(
-      query(
-        collection(db, 'one_sessions', sessionId, 'messages'),
-        orderBy('createdAt', 'asc'),
-        limit(40)
-      )
-    );
-    return snap.docs.map(d => {
-      const data = d.data();
-      return { role: data.role as string, content: data.content as string };
-    });
-  }, []);
+  const snap = await getDocs(
+    query(
+      collection(db, 'one_sessions', sessionId, 'messages'),
+      orderBy('createdAt', 'desc'),
+      limit(40)
+    )
+  );
+  return snap.docs.map(d => {
+    const data = d.data();
+    return { role: data.role as string, content: data.content as string };
+  }).reverse();
 }
 
 // Call /api/speak, passing session history so Plex carries the thread.
@@ -204,52 +203,84 @@ export async function POST(req: NextRequest) {
   // ── Send a message ─────────────────────────────────────────────────────────
   if (action === 'message') {
     const { sessionId, content } = body;
-    if (!sessionId || !content) {
+    if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.includes('/') ||
+        typeof content !== 'string' || !content.trim()) {
       return NextResponse.json(
-        { error: 'missing sessionId or content' },
+        { ok: false, error: 'valid sessionId and content required' },
         { status: 400 }
       );
     }
 
-    // Fix 1: load history from one_sessions before storing the new message
-    const history = await loadSessionHistory(sessionId);
+    let history: { role: string; content: string }[];
+    try {
+      history = await loadSessionHistory(sessionId);
+    } catch {
+      return NextResponse.json({
+        ok: false, code: 'history_read_failed',
+        error: 'Session history could not be loaded. Nothing was sent or saved.',
+        userMessageSaved: false, replySaved: false,
+      }, { status: 503 });
+    }
 
-    // Store user message
-    await safeGet(() =>
-      addDoc(collection(db, 'one_sessions', sessionId, 'messages'), {
+    try {
+      await addDoc(collection(db, 'one_sessions', sessionId, 'messages'), {
         role: 'joe',
         content,
         createdAt: serverTimestamp(),
-      }), null
-    );
+      });
+    } catch {
+      return NextResponse.json({
+        ok: false, code: 'user_message_save_failed',
+        error: 'Your message could not be confirmed saved. Plex was not called. Reload before retrying.',
+        userMessageSaved: false, replySaved: false,
+      }, { status: 503 });
+    }
 
-    // Pass full history + new message to speak
-    const historyWithNew = [...history, { role: 'joe', content }];
+    // overrideHistory contains prior turns only; speak receives this turn separately.
     const plexReply = await callSpeak(
       content,
       sessionId,
-      historyWithNew,
+      history,
       undefined,
       sessionCookie
     );
 
-    if (plexReply) {
-      await safeGet(() =>
-        addDoc(collection(db, 'one_sessions', sessionId, 'messages'), {
-          role: 'plex',
-          content: plexReply,
-          createdAt: serverTimestamp(),
-        }), null
-      );
+    if (!plexReply) {
+      return NextResponse.json({
+        ok: false, code: 'speak_failed',
+        error: 'Your message is saved, but no reply was received. Reload before retrying to avoid duplicating your message.',
+        userMessageSaved: true, replySaved: false,
+      }, { status: 502 });
     }
 
-    await safeGet(() =>
-      updateDoc(doc(db, 'one_sessions', sessionId), {
-        updatedAt: serverTimestamp()
-      }), null
-    );
+    try {
+      await addDoc(collection(db, 'one_sessions', sessionId, 'messages'), {
+        role: 'plex',
+        content: plexReply,
+        createdAt: serverTimestamp(),
+      });
+    } catch {
+      return NextResponse.json({
+        ok: false, code: 'reply_save_failed',
+        error: 'Plex replied, but the reply could not be confirmed saved. Copy it before leaving or reloading.',
+        plexReply, userMessageSaved: true, replySaved: false,
+      }, { status: 503 });
+    }
 
-    return NextResponse.json({ ok: true, plexReply });
+    try {
+      await updateDoc(doc(db, 'one_sessions', sessionId), {
+        updatedAt: serverTimestamp()
+      });
+    } catch {
+      return NextResponse.json({
+        ok: true, plexReply, userMessageSaved: true, replySaved: true,
+        warning: 'Both messages are saved, but the session timestamp could not be updated.',
+      });
+    }
+
+    return NextResponse.json({
+      ok: true, plexReply, userMessageSaved: true, replySaved: true,
+    });
   }
 
   // ── Close session ──────────────────────────────────────────────────────────
