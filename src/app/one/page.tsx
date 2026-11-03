@@ -10,6 +10,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Footer from '@/components/Footer';
 import { RepoManagerPanel, ActivityLogPanel, type RepoFile } from './one-panels';
+import {
+  PROJECT_ATTACHMENT_UNVERIFIED,
+  actionOutcomeNotice,
+  applyQueueResponse,
+  emptyQueue,
+  interpretActionResponse,
+  projectAttachmentMessage,
+  queueNotices,
+  queueReadSucceeded,
+  type QueueSnapshot,
+} from '@/lib/one-queue-state';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +111,19 @@ function statusColor(s: string) {
   if (s === 'done' || s === 'acknowledged') return 'var(--accent)';
   if (s === 'deferred') return 'var(--muted)';
   return 'var(--muted)';
+}
+
+/** Merge an /api/one payload into the non-queue view state. */
+function mergeOneState(prev: ONEState | null, payload: unknown): ONEState {
+  const body = payload as Partial<ONEState>;
+  const base: ONEState = prev ?? {
+    sediment: 'neutral',
+    autonomy: { level: 1, label: 'observe', updatedAt: null },
+    eckoFragments: [],
+    requests: [],
+    log: [],
+  };
+  return { ...base, ...body, requests: [] };
 }
 
 function fmtTime(ts: any): string {
@@ -465,38 +489,77 @@ function VoicePanel({
 // ─── Request Popup ────────────────────────────────────────────────────────────
 
 function RequestPopup({
-  req, projects, onClose, onUpdate, onDelete,
+  req, projects, onClose, onUpdate, onDelete, onNotice,
 }: {
   req: any; projects: Project[]; onClose: () => void;
-  onUpdate: (id: string, status: string, notes?: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onUpdate: (id: string, status: string, notes?: string) => Promise<boolean>;
+  onDelete: (id: string) => Promise<boolean>;
+  onNotice?: (message: string | null) => void;
 }) {
   const [working, setWorking] = useState(false);
   const [notes, setNotes] = useState(req.notes ?? '');
   const [pickedStatus, setPickedStatus] = useState(req.status ?? 'pending');
   const [targetProject, setTargetProject] = useState('');
+  const [error, setError] = useState<string | null>(null);
 
   async function act(status: string, extraNotes?: string) {
     setWorking(true);
-    await onUpdate(req.id, status, extraNotes ?? notes);
-    setWorking(false); onClose();
+    setError(null);
+    const saved = await onUpdate(req.id, status, extraNotes ?? notes);
+    setWorking(false);
+    if (!saved) {
+      // Keep the editor open with the notes intact; nothing typed is lost.
+      setError('Could not save this request. Your notes are still here — try again.');
+      return;
+    }
+    onClose();
   }
 
   async function sendToProject() {
     if (!targetProject) return;
     setWorking(true);
+    setError(null);
     const proj = projects.find(p => p.id === targetProject);
-    if (proj) {
-      const newNotes = proj.notes
-        ? `${proj.notes.trimEnd()}\n\n— plex request: ${req.request}`
-        : `plex request: ${req.request}`;
-      await fetch('/api/one', {
+    if (!proj) {
+      setWorking(false);
+      setError('That project is no longer in the list.');
+      return;
+    }
+
+    const newNotes = proj.notes
+      ? `${proj.notes.trimEnd()}\n\n— plex request: ${req.request}`
+      : `plex request: ${req.request}`;
+
+    let projectOk = false;
+    let projectPayload: unknown = null;
+    try {
+      const res = await fetch('/api/one', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'update_project', id: proj.id, title: proj.title, status: proj.status, notes: newNotes }),
       });
-      await onUpdate(req.id, 'in-progress', `→ project: ${proj.title}`);
+      projectOk = res.ok;
+      projectPayload = await res.json().catch(() => null);
+    } catch {
+      projectOk = false;
+      projectPayload = null;
     }
-    setWorking(false); onClose();
+
+    if (!interpretActionResponse(projectOk, projectPayload, 'save').success) {
+      setWorking(false);
+      setError(projectAttachmentMessage(proj.title, 'project-unconfirmed'));
+      return;
+    }
+
+    const linked = await onUpdate(req.id, 'in-progress', `→ project: ${proj.title}`);
+    setWorking(false);
+    if (!linked) {
+      setError(projectAttachmentMessage(proj.title, 'request-unconfirmed'));
+      return;
+    }
+    // The project write answered ok, but `update_project` reports success even
+    // when the note was not persisted, so the attachment stays unverified.
+    onNotice?.(PROJECT_ATTACHMENT_UNVERIFIED);
+    onClose();
   }
 
   const btnBase: React.CSSProperties = {
@@ -534,6 +597,13 @@ function RequestPopup({
           borderLeft: '2px solid var(--accent)', paddingLeft: '1rem' }}>
           {req.request ?? '(no text)'}
         </p>
+
+        {error && (
+          <p style={{ ...mono, fontSize: '0.72rem', color: '#f0a500', border: '1px solid #f0a50055',
+            borderRadius: '0.5rem', padding: '0.5rem 0.7rem', marginBottom: '1.25rem', lineHeight: 1.6 }}>
+            {error}
+          </p>
+        )}
 
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1.25rem' }}>
           <button style={btnAccent} disabled={working} onClick={() => act('acknowledged')}>✓ acknowledge</button>
@@ -584,7 +654,16 @@ function RequestPopup({
           <button style={{ ...btnBase, opacity: 0.4 }} disabled={working}
             onClick={async () => {
               if (!confirm('Delete this request?')) return;
-              setWorking(true); await onDelete(req.id); setWorking(false); onClose();
+              setWorking(true);
+              setError(null);
+              const deleted = await onDelete(req.id);
+              setWorking(false);
+              if (!deleted) {
+                // Keep the popup open; the notes and status stay editable.
+                setError('Could not confirm the delete — this request may still be here.');
+                return;
+              }
+              onClose();
             }}>
             delete request
           </button>
@@ -608,6 +687,8 @@ function OneView() {
   const [govWorking, setGovWorking] = useState(false);
   const [reqFilter, setReqFilter] = useState('all');
   const [reqWorking, setReqWorking] = useState<string | null>(null);
+  const [queue, setQueue] = useState<QueueSnapshot>(emptyQueue());
+  const [queueActionError, setQueueActionError] = useState<string | null>(null);
   const [activeRequest, setActiveRequest] = useState<any | null>(null);
   const [deferAllWorking, setDeferAllWorking] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -631,13 +712,38 @@ function OneView() {
   const [logLoading, setLogLoading] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
 
-  const refresh = useCallback(async () => {
-    const r = await fetch('/api/one');
-    setState(await r.json());
+  const refresh = useCallback(async (): Promise<boolean> => {
+    let ok = false;
+    let payload: unknown = null;
+    try {
+      const res = await fetch('/api/one');
+      ok = res.ok;
+      payload = await res.json().catch(() => null);
+    } catch {
+      ok = false;
+      payload = null;
+    }
+
+    // A failed read must never replace the last known queue with an empty one.
+    setQueue(prev => applyQueueResponse(prev.requests, ok, payload));
+    if (ok && payload) setState(prev => mergeOneState(prev, payload));
+    setLoading(false);
+    return queueReadSucceeded(ok, payload);
   }, []);
 
   useEffect(() => {
-    fetch('/api/one').then(r => r.json()).then(d => { setState(d); setLoading(false); });
+    fetch('/api/one')
+      .then(async res => ({ ok: res.ok, payload: await res.json().catch(() => null) }))
+      .then(({ ok, payload }) => {
+        // A failed read must never replace the last known queue with an empty one.
+        setQueue(prev => applyQueueResponse(prev.requests, ok, payload));
+        if (ok && payload) setState(prev => mergeOneState(prev, payload));
+        setLoading(false);
+      })
+      .catch(() => {
+        setQueue(prev => applyQueueResponse(prev.requests, false, null));
+        setLoading(false);
+      });
     fetchProjects();
     fetchSleep();
   }, []);
@@ -728,35 +834,56 @@ function OneView() {
     setProjectWorking(null); fetchProjects();
   }
 
-  async function updateRequest(id: string, status: string, notes?: string) {
-    setReqWorking(id);
-    await fetch('/api/one', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'update_request', id, status, ...(notes !== undefined ? { notes } : {}) }),
-    });
-    await refresh(); await fetchProjects(); setReqWorking(null);
+  async function postOneAction(payload: Record<string, unknown>): Promise<{ ok: boolean; body: unknown }> {
+    try {
+      const res = await fetch('/api/one', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const body = await res.json().catch(() => null);
+      return { ok: res.ok, body };
+    } catch {
+      return { ok: false, body: null };
+    }
   }
 
-  async function deleteRequest(id: string) {
+  async function updateRequest(id: string, status: string, notes?: string): Promise<boolean> {
     setReqWorking(id);
-    await fetch('/api/one', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'delete_request', id }),
+    setQueueActionError(null);
+    const result = await postOneAction({
+      action: 'update_request', id, status, ...(notes !== undefined ? { notes } : {}),
     });
-    await refresh(); setReqWorking(null);
+    const feedback = interpretActionResponse(result.ok, result.body, 'save');
+    // The mutation and the follow-up read are separate outcomes: a saved
+    // request whose refresh failed is not a failed save.
+    const refreshed = await refresh();
+    await fetchProjects();
+    setReqWorking(null);
+    setQueueActionError(actionOutcomeNotice(feedback.success, feedback.message, refreshed));
+    return feedback.success;
+  }
+
+  async function deleteRequest(id: string): Promise<boolean> {
+    setReqWorking(id);
+    setQueueActionError(null);
+    const result = await postOneAction({ action: 'delete_request', id });
+    const feedback = interpretActionResponse(result.ok, result.body, 'delete');
+    const refreshed = await refresh();
+    setReqWorking(null);
+    setQueueActionError(actionOutcomeNotice(feedback.success, feedback.message, refreshed));
+    return feedback.success;
   }
 
   async function deferAllPending() {
-    if (!state) return;
-    const pending = state.requests.filter((r: any) => r.status === 'pending');
+    const pending = queue.requests.filter((r: any) => r.status === 'pending');
     if (!pending.length) return;
     setDeferAllWorking(true);
-    await Promise.all(pending.map((r: any) =>
-      fetch('/api/one', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'update_request', id: r.id, status: 'deferred' }),
-      })
+    setQueueActionError(null);
+    const results = await Promise.all(pending.map((r: any) =>
+      postOneAction({ action: 'update_request', id: r.id, status: 'deferred' })
     ));
+    const failures = results.filter(r => !interpretActionResponse(r.ok, r.body, 'save').success).length;
+    if (failures > 0) setQueueActionError(`${failures} of ${pending.length} requests could not be deferred.`);
     await refresh(); setDeferAllWorking(false);
   }
 
@@ -853,11 +980,28 @@ function OneView() {
     if (data.ok) loadZone(activeZone);
   }
 
-  if (loading || !state) return <p style={muted}>loading ONE...</p>;
+  if (loading) return <p style={muted}>loading ONE...</p>;
+
+  if (!state) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <p style={{ ...mono, color: 'var(--accent)', marginBottom: '0.75rem' }}>ONE could not be loaded.</p>
+        <p style={{ ...muted, marginBottom: '1rem', lineHeight: 1.6 }}>
+          {queue.error ?? 'The dashboard data is unavailable right now.'}
+        </p>
+        <button
+          onClick={() => { setLoading(true); void refresh(); }}
+          style={{ ...mono, padding: '0.35rem 0.8rem', background: 'transparent', color: 'var(--muted)',
+            border: '1px solid var(--border)', cursor: 'pointer', borderRadius: '0.5rem' }}
+        >retry</button>
+      </div>
+    );
+  }
 
   const showSleep = sleep && !sleepDismissed;
-  const filtered = reqFilter === 'all' ? state.requests : state.requests.filter((r: any) => r.status === reqFilter);
-  const pendingCount = state.requests.filter((r: any) => r.status === 'pending').length;
+  const queueRequests = queue.requests as any[];
+  const filtered = reqFilter === 'all' ? queueRequests : queueRequests.filter((r: any) => r.status === reqFilter);
+  const pendingCount = queueRequests.filter((r: any) => r.status === 'pending').length;
 
   const btnBase: React.CSSProperties = {
     ...mono, padding: '0.35rem 0.8rem', background: 'transparent', color: 'var(--muted)',
@@ -1004,6 +1148,12 @@ function OneView() {
                 </button>
               )}
             </div>
+            {queueNotices(queue, queueActionError).map(notice => (
+              <p key={notice} style={{ ...mono, fontSize: '0.7rem', color: '#f0a500', border: '1px solid #f0a50055',
+                borderRadius: '0.5rem', padding: '0.5rem 0.7rem', marginBottom: '0.5rem', lineHeight: 1.6 }}>
+                {notice}
+              </p>
+            ))}
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
               {STATUS_FILTERS.map(f => (
                 <button key={f} onClick={() => setReqFilter(f)}
@@ -1016,7 +1166,9 @@ function OneView() {
               ))}
             </div>
             {filtered.length === 0
-              ? <p style={muted}>No {reqFilter === 'all' ? '' : reqFilter + ' '}requests.</p>
+              ? <p style={muted}>{queue.stale
+                  ? 'No requests available to show while the queue is unavailable.'
+                  : `No ${reqFilter === 'all' ? '' : reqFilter + ' '}requests.`}</p>
               : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {filtered.map((req: any) => (
@@ -1162,6 +1314,7 @@ function OneView() {
           onClose={() => setActiveRequest(null)}
           onUpdate={updateRequest}
           onDelete={deleteRequest}
+          onNotice={setQueueActionError}
         />
       )}
     </>
@@ -1542,7 +1695,10 @@ export default function PlexSable() {
 
   useEffect(() => {
     fetch('/api/one').then(r => r.json()).then(d => {
-      setPendingCount((d.requests ?? []).filter((r: any) => r.status === 'pending').length);
+      // Leave the last known count alone when the queue could not be read.
+      if (!d?.requestsError && Array.isArray(d?.requests)) {
+        setPendingCount(d.requests.filter((r: any) => r.status === 'pending').length);
+      }
     }).catch(() => {});
   }, [view]);
 
