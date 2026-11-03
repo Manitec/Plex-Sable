@@ -5,6 +5,17 @@ import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { makeGroq } from "@/lib/plex-identity";
 import { selectSessionHistory, toModelHistoryRole, type SessionHistorySelection } from "@/lib/session-history";
+import {
+  appendPlexFile,
+  cleanPath,
+  executeRescuedCalls,
+  extractTextFunctionCalls,
+  fetchPlexFile,
+  isActiveContextFileRequest,
+  shouldUseTools,
+  type FileRequest,
+  type RescueDeps,
+} from "@/lib/plex-runtime";
 
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
@@ -73,33 +84,6 @@ if (msg.includes("model_not_found") || msg.includes("does not exist")) return "m
 if (isRateLimit(err)) return "rate_limit";
 return "unknown";
 }
-function cleanPath(path: string): string {
-  return path.replace(/^\/+/, "");
-}
-function normalizePlexArchivePath(path: string): { path: string; error?: string } {
-  const cleaned = cleanPath(path);
-  if (cleaned.startsWith("plex/sediment/")) {
-    return { path: `sediment/${cleaned.slice("plex/sediment/".length)}` };
-  }
-  if (cleaned.startsWith("plex/dreams/")) {
-    return { path: `dreams/${cleaned.slice("plex/dreams/".length)}` };
-  }
-  if (cleaned.startsWith("sediment/") || cleaned.startsWith("dreams/")) {
-    return { path: cleaned };
-  }
-  if (cleaned.includes("/sediment/") || cleaned.includes("/dreams/")) {
-    return { path: cleaned, error: "Invalid archive path. Use sediment/YYYY-MM-DD.md or dreams/YYYY-MM-DD.md." };
-  }
-  return { path: cleaned };
-}
-function isAppendOnlyPath(path: string): boolean {
-  const p = cleanPath(path);
-  return /^sediment\/\d{4}-\d{2}-\d{2}\.md$/.test(p) || /^dreams\/\d{4}-\d{2}-\d{2}\.md$/.test(p);
-}
-function isIdentityPath(path: string): boolean {
-  const p = cleanPath(path);
-  return p === "plex-is.txt" || p === "plex-def.txt";
-}
 function tail(s: string | null, maxChars: number): string | null {
   if (!s) return null;
   return s.length <= maxChars ? s : s.slice(-maxChars);
@@ -123,81 +107,6 @@ async function callLMStudio(messages: { role: string; content: string }[]): Prom
   if (!res.ok) throw new Error(`LM Studio error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? "";
-}
-
-async function fetchPlexFile(path: string, token: string): Promise<string | null> {
-  try {
-    const safePath = cleanPath(path);
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }, cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Buffer.from(data.content, "base64").toString("utf-8").trim();
-  } catch {
-    return null;
-  }
-}
-
-async function getPlexFileSha(path: string, token: string): Promise<string | null> {
-  try {
-    const safePath = cleanPath(path);
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }, cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.sha ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function writePlexFile(path: string, content: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const safePath = cleanPath(path);
-    const existingSha = await getPlexFileSha(safePath, token);
-    const body: any = { message, content: Buffer.from(content, "utf-8").toString("base64"), branch: PLEX_REPO_BRANCH };
-    if (existingSha) body.sha = existingSha;
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}`,
-      { method: "PUT", headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      return { ok: false, error: err?.message ?? `HTTP ${res.status}` };
-    }
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: e?.message ?? "unknown error" };
-  }
-}
-
-async function appendPlexFile(path: string, newEntry: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
-  const normalized = normalizePlexArchivePath(path);
-  if (normalized.error) return { ok: false, error: normalized.error };
-  const safePath = normalized.path;
-
-  // Identity files can only be amended — never blanked or fully replaced by temporary dumps
-  if (isIdentityPath(safePath)) {
-    const existing = (await fetchPlexFile(safePath, token)) ?? "";
-    const trimmedNew = newEntry.trim();
-    if (trimmedNew.length < 80 && existing.length > 200) {
-      return { ok: false, error: "Identity file write rejected: content too short / looks like temporary emotion dump. Amend only when something genuinely shifts." };
-    }
-    const combined = existing ? `${existing.trim()}\n\n---\n${trimmedNew}` : trimmedNew;
-    return writePlexFile(safePath, combined, message, token);
-  }
-
-  if (isAppendOnlyPath(safePath)) {
-    const existing = (await fetchPlexFile(safePath, token)) ?? "";
-    const combined = existing ? `${existing}\n\n${newEntry}` : newEntry;
-    return writePlexFile(safePath, combined, message, token);
-  }
-
-  return writePlexFile(safePath, newEntry, message, token);
 }
 
 async function listPlexDir(path: string, token: string): Promise<string | null> {
@@ -320,8 +229,6 @@ function extractExplicitPath(message: string): string | null {
   return null;
 }
 
-type FileRequest = { type: "file"; path: string } | { type: "dir"; path: string };
-
 function detectFileRequest(message: string): FileRequest | null {
   const m = message.toLowerCase().trim();
   const explicit = extractExplicitPath(message);
@@ -341,16 +248,6 @@ function detectFileRequest(message: string): FileRequest | null {
   }
   if (/read (your )?repo|list (your )?files|what.s in/.test(m)) return { type: "dir", path: "" };
   return null;
-}
-
-function isActiveContextFileRequest(req: FileRequest | null): boolean {
-  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));
-}
-
-function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {
-  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;
-  if (mode === "operational" || mode === "synthesis") return true;
-  return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
 }
 
 async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {
@@ -396,45 +293,22 @@ async function runMind(question: string, context: string, baseUrl: string): Prom
   }
 }
 
-// ─── Text-mode function call rescue ──────────────────────────────────────────
-interface RescuedCall {
-  name: string;
-  args: Record<string, any>;
-}
-
-function extractTextFunctionCalls(text: string): { cleaned: string; calls: RescuedCall[] } {
-  const calls: RescuedCall[] = [];
-  const pattern = /<function=([a-zA-Z_]+)>([\s\S]*?)<\/function>/g;
-  const cleaned = text.replace(pattern, (_match, name, argsRaw) => {
-    try {
-      const args = JSON.parse(argsRaw.trim());
-      calls.push({ name, args });
-    } catch { /* skip unparseable */ }
-    return "";
-  }).trim();
-  return { cleaned, calls };
-}
-
-async function executeRescuedCalls(calls: RescuedCall[], token: string): Promise<{ requestSubmitted?: string }> {
-  let requestSubmitted: string | undefined;
-  for (const { name, args } of calls) {
-    try {
-      if (name === "write_plex_file") {
-        await appendPlexFile(args.path, args.content, args.message ?? "plex: write (rescued from text)", token);
-      } else if (name === "submit_request") {
-        await getAdminDb().collection("one_requests").add({
-          request: args.request ?? "",
-          notes: args.notes ?? "",
-          source: "plex",
-          status: "pending",
-          createdAt: FieldValue.serverTimestamp(),
-        });
-        requestSubmitted = args.request;
-      }
-      // read / list / recall / etc. cannot inject results in rescue path — skip
-    } catch { /* best-effort */ }
-  }
-  return { requestSubmitted };
+// ─── Text-mode function call rescue wiring ───────────────────────────────────
+// Execution lives in src/lib/plex-runtime.ts; this supplies its side effects so
+// the extracted module stays free of Firestore and of the Next path alias.
+function makeRescueDeps(token: string): RescueDeps {
+  return {
+    writeFile: (path, content, message) => appendPlexFile(path, content, message, token),
+    submitRequest: async (request, notes) => {
+      await getAdminDb().collection("one_requests").add({
+        request,
+        notes,
+        source: "plex",
+        status: "pending",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    },
+  };
 }
 
 // ─── Sub-persona direct call ─────────────────────────────────────────────────
@@ -547,13 +421,13 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(retryText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
         return { text: cleaned, fallback: true, requestSubmitted };
       } catch {
         const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
         const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
         return { text: cleaned, fallback: true, requestSubmitted };
       }
     }
@@ -566,7 +440,7 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const rawText = stripThinkTags(firstMsg.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(rawText);
     if (calls.length > 0) {
-      const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
       return { text: cleaned, fallback: false, requestSubmitted };
     }
     return { text: rawText, fallback: false };
@@ -646,7 +520,7 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const secondText = stripThinkTags(second.choices[0].message.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(secondText);
     if (calls.length > 0) {
-      const rescued = token ? await executeRescuedCalls(calls, token) : {};
+      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
       return { text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
     }
     return { text: secondText, fallback: false, requestSubmitted };
@@ -661,7 +535,7 @@ const toolSummary = toolMessages
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
       const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
       const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, token) : {};
+      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
       return { text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
     }
     throw err;
