@@ -10,6 +10,9 @@
 //     the requirement is explicit failure with no overwrite.
 // Neither assertion was deleted to hide a regression: both pinned unsafe
 // behavior that this batch intentionally removes.
+//
+// Write results are discriminated now, so assertions use status/code instead of
+// the old ok/error pair. The integrity requirements below are unchanged.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -63,8 +66,8 @@ test("safety: a failed read must not be turned into a destructive PUT", async ()
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
 
     assert.equal(stub.puts().length, 0, "a read failure must not be followed by a PUT");
-    assert.equal(result.ok, false, "an unreadable day file must surface as a failed write");
-    assert.match(result.error, /could not read existing content/);
+    assert.equal(result.status, "rejected", "an unreadable day file must surface as a failed write");
+    assert.equal(result.code, "read-failed");
   } finally {
     stub.restore();
   }
@@ -75,8 +78,8 @@ test("safety: a permission failure is not an empty file", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
     assert.equal(stub.puts().length, 0);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /HTTP 401/);
+    assert.equal(result.status, "rejected");
+    assert.equal(result.code, "permission");
   } finally {
     stub.restore();
   }
@@ -89,8 +92,8 @@ test("safety: a network error is not an empty file", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
     assert.equal(stub.puts().length, 0);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /network error/);
+    assert.equal(result.status, "rejected");
+    assert.equal(result.code, "network");
   } finally {
     stub.restore();
   }
@@ -101,8 +104,8 @@ test("safety: a malformed response is not an empty file", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
     assert.equal(stub.puts().length, 0);
-    assert.equal(result.ok, false);
-    assert.match(result.error, /malformed response/);
+    assert.equal(result.status, "rejected");
+    assert.equal(result.code, "read-failed");
   } finally {
     stub.restore();
   }
@@ -116,7 +119,7 @@ test("safety: content and sha come from the same read", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { status: "confirmed", path: "sediment/2026-01-01.md" });
     assert.equal(stub.gets().length, 1, "the file must be read exactly once");
     const puts = stub.puts();
     assert.equal(puts.length, 1);
@@ -134,8 +137,8 @@ test("safety: a concurrent-write conflict fails without overwriting", async () =
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
 
-    assert.equal(result.ok, false, "a conflict must be an explicit failure");
-    assert.match(result.error, /Concurrent write conflict/);
+    assert.equal(result.status, "rejected", "a conflict must be an explicit failure");
+    assert.equal(result.code, "conflict");
     assert.equal(stub.puts().length, 1, "a conflict must not be retried into an overwrite");
     assert.equal(stub.puts()[0].body.sha, "sha-stale");
   } finally {
@@ -151,7 +154,7 @@ test("safety: a genuine 404 creates the file without a sha", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "FIRST-ENTRY", "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { status: "confirmed", path: "sediment/2026-01-01.md" });
     const puts = stub.puts();
     assert.equal(puts.length, 1);
     assert.equal(puts[0].body.sha, undefined, "creation must not attach a sha");
@@ -168,8 +171,8 @@ test("safety: a failed creation stays an explicit failure", async () => {
   });
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "FIRST-ENTRY", "plex: write", "tok");
-    assert.equal(result.ok, false);
-    assert.equal(result.error, "boom");
+    assert.equal(result.status, "unknown");
+    assert.equal(result.code, "server-error");
   } finally {
     stub.restore();
   }
@@ -184,7 +187,7 @@ test("safety: a normal append preserves existing text", async () => {
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "NEW-ENTRY", "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { status: "confirmed", path: "sediment/2026-01-01.md" });
     const puts = stub.puts();
     assert.equal(puts.length, 1);
     assert.equal(writtenText(puts[0]), `${existing}\n\nNEW-ENTRY`);
@@ -220,8 +223,8 @@ test("safety: two writers — A's stale append fails and B's entry survives", as
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "A-NEW-ENTRY", "plex: write", "tok");
 
-    assert.equal(result.ok, false, "A must receive an explicit failure");
-    assert.match(result.error, /Concurrent write conflict/);
+    assert.equal(result.status, "rejected", "A must receive an explicit failure");
+    assert.equal(result.code, "conflict");
     assert.equal(stub.puts().length, 1, "A must not retry into an overwrite");
     assert.equal(state.content.includes("B-ENTRY"), true, "B's entry must survive");
     assert.equal(state.content.includes("A-NEW-ENTRY"), false, "A's stale append must not be applied");
@@ -239,7 +242,7 @@ test("safety: an empty existing file is valid, not missing or malformed", async 
   try {
     const result = await appendPlexFile("sediment/2026-01-01.md", "FIRST-ENTRY", "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true }, "an empty day file must be read as a valid file");
+    assert.deepEqual(result, { status: "confirmed", path: "sediment/2026-01-01.md" }, "an empty day file must be read as a valid file");
     assert.equal(stub.gets().length, 1);
     const puts = stub.puts();
     assert.equal(puts.length, 1);
@@ -260,7 +263,7 @@ test("safety: identity amendment keeps existing text, separator and paired sha",
   try {
     const result = await appendPlexFile("plex-is.txt", amendment, "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { status: "confirmed", path: "plex-is.txt" });
     const puts = stub.puts();
     assert.equal(puts.length, 1);
     assert.equal(writtenText(puts[0]), `${existing}\n\n---\n${amendment}`);
@@ -278,7 +281,7 @@ test("safety: a non-daily path is still replaced, now with the paired sha", asyn
   try {
     const result = await appendPlexFile("notes/scratch.md", "REPLACEMENT", "plex: write", "tok");
 
-    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(result, { status: "confirmed", path: "notes/scratch.md" });
     const puts = stub.puts();
     assert.equal(puts.length, 1);
     assert.equal(writtenText(puts[0]), "REPLACEMENT", "non-daily paths are replaced, not appended");

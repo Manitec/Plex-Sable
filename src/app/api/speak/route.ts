@@ -7,15 +7,20 @@ import { makeGroq } from "@/lib/plex-identity";
 import { selectSessionHistory, toModelHistoryRole, type SessionHistorySelection } from "@/lib/session-history";
 import {
   appendPlexFile,
+  assembleErrorResult,
+  assembleTurnResult,
   cleanPath,
   executeRescuedCalls,
   extractTextFunctionCalls,
   fetchPlexFile,
   isActiveContextFileRequest,
+  runWrite,
   shouldUseTools,
+  WriteTracker,
   type FileRequest,
   type RescueDeps,
 } from "@/lib/plex-runtime";
+import type { TurnResult, WriteOutcome } from "@/lib/write-outcome";
 
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
@@ -296,9 +301,11 @@ async function runMind(question: string, context: string, baseUrl: string): Prom
 // ─── Text-mode function call rescue wiring ───────────────────────────────────
 // Execution lives in src/lib/plex-runtime.ts; this supplies its side effects so
 // the extracted module stays free of Firestore and of the Next path alias.
-function makeRescueDeps(token: string): RescueDeps {
+function makeRescueDeps(token: string, tracker: WriteTracker, batch: string): RescueDeps {
   return {
     writeFile: (path, content, message) => appendPlexFile(path, content, message, token),
+    tracker,
+    batch,
     submitRequest: async (request, notes) => {
       await getAdminDb().collection("one_requests").add({
         request,
@@ -393,9 +400,13 @@ async function callGroqWithTools(
   prefetchedContext?: string,
   baseUrl?: string,
   liveBasePrompt?: string,
-  tools?: Groq.Chat.Completions.ChatCompletionTool[]
-): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
+  tools?: Groq.Chat.Completions.ChatCompletionTool[],
+  trackerIn?: WriteTracker
+): Promise<TurnResult> {
   const groq = makeGroq();
+  // One tracker per request/fallback flow; the single authoritative outcome
+  // store. The route passes its own so a failed reply can still report it.
+  const tracker = trackerIn ?? new WriteTracker();
   const resolvedBaseUrl = baseUrl ?? "http://localhost:3000";
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
@@ -421,14 +432,14 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(retryText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
-        return { text: cleaned, fallback: true, requestSubmitted };
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "primary-retry")) : {};
+        return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       } catch {
         const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
         const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
-        return { text: cleaned, fallback: true, requestSubmitted };
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "fallback")) : {};
+        return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       }
     }
     throw err;
@@ -440,10 +451,10 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const rawText = stripThinkTags(firstMsg.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(rawText);
     if (calls.length > 0) {
-      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
-      return { text: cleaned, fallback: false, requestSubmitted };
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "text")) : {};
+      return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted, tracker });
     }
-    return { text: rawText, fallback: false };
+    return assembleTurnResult({ text: rawText, fallback: false, tracker });
   }
 
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -459,8 +470,15 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
       if (fnName === "read_plex_file") {
         result = (await fetchPlexFile(args.path, token)) ?? `No file found at ${args.path}`;
       } else if (fnName === "write_plex_file") {
-        const { ok, error } = await appendPlexFile(args.path, args.content, args.message ?? "plex: write", token);
-        result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
+        const written = await runWrite({
+          callId: toolCall.id,
+          path: args.path,
+          content: args.content,
+          message: args.message,
+          writer: (path, content, message) => appendPlexFile(path, content, message, token),
+          tracker,
+        });
+        result = written.toolContent;
       } else if (fnName === "list_plex_dir") {
         result = (await listPlexDir(args.path, token)) ?? `No directory found at ${args.path}`;
       } else if (fnName === "recall") {
@@ -520,10 +538,10 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const secondText = stripThinkTags(second.choices[0].message.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(secondText);
     if (calls.length > 0) {
-      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
-      return { text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
+      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools")) : {};
+      return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
-    return { text: secondText, fallback: false, requestSubmitted };
+    return assembleTurnResult({ text: secondText, fallback: false, requestSubmitted, tracker });
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
       console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });
@@ -535,8 +553,8 @@ const toolSummary = toolMessages
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
       const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
       const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token)) : {};
-      return { text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
+      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools-fallback")) : {};
+      return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
     throw err;
   }
@@ -611,6 +629,9 @@ function fireDreamNode(message: string, responseText: string, mode: string, sess
 }
 
 export async function POST(req: NextRequest) {
+  // Request-local outcome store, visible to the error path as well as the
+  // success path, so a write completed before a reply failure is not lost.
+  const writeTracker = new WriteTracker();
   try {
     const { message: rawMessage, sessionId = "joe", overrideHistory, forceMode, provider = "groq" } = await req.json();
     if (!rawMessage) return NextResponse.json({ error: "Message required" }, { status: 400 });
@@ -639,7 +660,7 @@ export async function POST(req: NextRequest) {
         content: m.content,
       }));
       const reply = await callSubPersona(voiceParam, message, subHistory);
-      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
+      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null, writeOutcomes: [] });
     }
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? "";
@@ -686,6 +707,7 @@ console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContex
 let response: string;
     let fallback = false;
     let requestSubmitted: string | undefined;
+    let writeOutcomes: WriteOutcome[] = [];
 
     if (provider === "lmstudio") {
       const lmMessages: { role: string; content: string }[] = [
@@ -695,10 +717,11 @@ let response: string;
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
     } else {
-      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools);
+      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools, writeTracker);
       response = result.text;
       fallback = result.fallback;
       requestSubmitted = result.requestSubmitted;
+      writeOutcomes = result.writeOutcomes;
     }
 
     if (historySelection.kind === "stored") {
@@ -719,10 +742,14 @@ let response: string;
       contextLoaded,
       baseLoaded,
       requestSubmitted: requestSubmitted ?? null,
+      writeOutcomes,
       provider: provider === "lmstudio" ? "lmstudio" : "groq",
     });
-  } catch (err: any) {
-    console.error("Speak route error FULL:", err?.message ?? String(err));
-    return NextResponse.json({ error: "Plex unavailable", detail: err?.message ?? String(err) }, { status: 500 });
+  } catch {
+    // Response-generation failure, not a persistence failure: keep the real
+    // outcomes and a fixed message. The diagnostic is fixed too — no raw
+    // exception, response body, credentials or model content is logged.
+    console.error("[speak] Speak response generation failed");
+    return NextResponse.json(assembleErrorResult({ message: "Plex unavailable", tracker: writeTracker }), { status: 500 });
   }
 }

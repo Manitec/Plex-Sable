@@ -5,7 +5,11 @@
 // opposite in test/plex-runtime.regression.test.mjs):
 //   - "characterization: a failed read still produces an entry-only PUT"
 //   - "characterization: a concurrent append is silently overwritten"
-// The "Please do" gate test and the rescue-outcome tests below are unchanged.
+//
+// Also replaced (write-outcome propagation): "characterization: rescue path
+// discards the write result" pinned the old silent discard and is now an
+// assertion that the outcome is recorded and propagated. The "Please do" gate
+// test below is unchanged.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -18,6 +22,7 @@ import {
   isActiveContextFileRequest,
   normalizePlexArchivePath,
   shouldUseTools,
+  WriteTracker,
 } from "../src/lib/plex-runtime.ts";
 
 function b64(text) {
@@ -86,44 +91,63 @@ test("characterization: text-mode function calls are stripped and parsed", () =>
   assert.deepEqual(broken.calls, []);
 });
 
-test("characterization: rescue path discards the write result", async () => {
+test("characterization: rescue path records the write outcome", async () => {
+  // Replaces "rescue path discards the write result", which asserted the old
+  // silent discard. Every real assertion moved to the propagation suite; this
+  // keeps the same rescue invocation and now requires the outcome to be kept.
   const seen = [];
+  const tracker = new WriteTracker();
   const out = await executeRescuedCalls(
     [{ name: "write_plex_file", args: { path: "sediment/2026-01-01.md", content: "NEW" } }],
     {
       writeFile: async (...args) => {
         seen.push(args);
-        return { ok: false, error: "boom" };
+        return { status: "rejected", path: "sediment/2026-01-01.md", code: "conflict" };
       },
       submitRequest: async () => {},
+      tracker,
     }
   );
 
-  // No error, no ok flag, nothing about the failed write reaches the caller.
   assert.equal(out.requestSubmitted, undefined);
-  assert.deepEqual(Object.keys(out), ["requestSubmitted"]);
   assert.equal(seen.length, 1);
   assert.equal(seen[0][2], "plex: write (rescued from text)");
+
+  const outcomes = tracker.outcomes;
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0].status, "rejected");
+  assert.equal(outcomes[0].code, "conflict");
+  assert.equal(JSON.stringify(outcomes).includes("boom"), false);
 });
 
-test("characterization: rescue path records submit_request only", async () => {
+test("characterization: rescue path records submit_request", async () => {
+  // Renamed from "... submit_request only": a submit still produces no write
+  // outcome, but the return value is no longer the only thing carried.
   const submitted = [];
+  const tracker = new WriteTracker();
   const out = await executeRescuedCalls(
     [{ name: "submit_request", args: { request: "raise the token budget", notes: "n" } }],
-    { writeFile: async () => ({ ok: true }), submitRequest: async (request, notes) => submitted.push({ request, notes }) }
+    {
+      writeFile: async () => ({ status: "confirmed", path: "unused.md" }),
+      submitRequest: async (request, notes) => submitted.push({ request, notes }),
+      tracker,
+    }
   );
   assert.equal(out.requestSubmitted, "raise the token budget");
   assert.deepEqual(submitted, [{ request: "raise the token budget", notes: "n" }]);
+  assert.deepEqual(tracker.outcomes, []);
 });
 
 test("characterization: rescue path swallows a throwing dependency", async () => {
+  const tracker = new WriteTracker();
   const out = await executeRescuedCalls(
     [{ name: "submit_request", args: { request: "x" } }],
     {
-      writeFile: async () => ({ ok: true }),
+      writeFile: async () => ({ status: "confirmed", path: "unused.md" }),
       submitRequest: async () => {
         throw new Error("firestore down");
       },
+      tracker,
     }
   );
   assert.equal(out.requestSubmitted, undefined);
@@ -136,8 +160,8 @@ test("characterization: identity safeguard still rejects a short entry", async (
   });
   try {
     const result = await appendPlexFile("plex-is.txt", "too short", "plex: write", "tok");
-    assert.equal(result.ok, false);
-    assert.match(result.error, /Identity file write rejected/);
+    assert.equal(result.status, "rejected");
+    assert.equal(result.code, "identity-too-short");
     assert.equal(stub.calls.filter((c) => c.method === "PUT").length, 0);
   } finally {
     stub.restore();
