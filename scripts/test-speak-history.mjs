@@ -9,6 +9,36 @@ function compile(source) {
 }
 const helper = { exports: {} };
 vm.runInNewContext(compile(readFileSync('src/lib/session-history.ts', 'utf8')), { exports: helper.exports });
+// The route imports the extracted runtime, so load the REAL module here instead
+// of substituting a permissive fake. It is transpiled exactly like the route and
+// given only what it genuinely needs: Buffer, and stubs that fail loudly. Its
+// sole import is `import type`, which the transpiler erases, so any require from
+// it is a hard error rather than an arbitrary-module escape hatch.
+const runtimeSource = compile(readFileSync('src/lib/plex-runtime.ts', 'utf8'));
+assert.equal(/require\(/.test(runtimeSource), false, 'plex-runtime must have no runtime imports');
+function loadRuntime() {
+  const api = {};
+  const network = [];
+  vm.runInNewContext(runtimeSource, {
+    exports: api,
+    Buffer,
+    URL,
+    console: { info() {}, warn() {}, error() {}, log() {} },
+    process: { env: {} },
+    fetch: async (url) => {
+      network.push(String(url));
+      throw new Error(`Unexpected network call from plex-runtime: ${url}`);
+    },
+    require(name) {
+      throw new Error(`Unexpected import in plex-runtime: ${name}`);
+    },
+  });
+  return { api, network };
+}
+const runtime = loadRuntime();
+assert.equal(typeof runtime.api.appendPlexFile, 'function', 'runtime must expose appendPlexFile');
+assert.equal(typeof runtime.api.planTurnTools, 'function', 'runtime must expose planTurnTools');
+assert.equal(runtime.network.length, 0, 'loading the runtime must perform no I/O');
 function harness({ stored = [], failWrite = false, fallback = false } = {}) {
   const state = { reads: 0, writes: [], calls: [] };
   const db = {
@@ -36,6 +66,7 @@ function harness({ stored = [], failWrite = false, fallback = false } = {}) {
       if (name === 'firebase-admin/firestore') return { FieldValue: { serverTimestamp: () => 0 } };
       if (name === '@/lib/plex-identity') return { makeGroq };
       if (name === '@/lib/session-history') return helper.exports;
+      if (name === '@/lib/plex-runtime') return runtime.api;
       if (name === 'uuid') return { v4: () => 'mock-id' };
       if (name === 'groq-sdk') return {};
       throw new Error(`Unexpected import: ${name}`);
