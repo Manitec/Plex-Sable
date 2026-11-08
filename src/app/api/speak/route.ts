@@ -14,11 +14,12 @@ import {
   extractTextFunctionCalls,
   fetchPlexFile,
   isActiveContextFileRequest,
+  planTurnTools,
   runWrite,
-  shouldUseTools,
   WriteTracker,
   type FileRequest,
   type RescueDeps,
+  type WriteScope,
 } from "@/lib/plex-runtime";
 import type { TurnResult, WriteOutcome } from "@/lib/write-outcome";
 
@@ -301,11 +302,12 @@ async function runMind(question: string, context: string, baseUrl: string): Prom
 // ─── Text-mode function call rescue wiring ───────────────────────────────────
 // Execution lives in src/lib/plex-runtime.ts; this supplies its side effects so
 // the extracted module stays free of Firestore and of the Next path alias.
-function makeRescueDeps(token: string, tracker: WriteTracker, batch: string): RescueDeps {
+function makeRescueDeps(token: string, tracker: WriteTracker, batch: string, scope: WriteScope): RescueDeps {
   return {
     writeFile: (path, content, message) => appendPlexFile(path, content, message, token),
     tracker,
     batch,
+    writeScope: scope,
     submitRequest: async (request, notes) => {
       await getAdminDb().collection("one_requests").add({
         request,
@@ -401,12 +403,15 @@ async function callGroqWithTools(
   baseUrl?: string,
   liveBasePrompt?: string,
   tools?: Groq.Chat.Completions.ChatCompletionTool[],
-  trackerIn?: WriteTracker
+  trackerIn?: WriteTracker,
+  writeScopeIn?: WriteScope
 ): Promise<TurnResult> {
   const groq = makeGroq();
   // One tracker per request/fallback flow; the single authoritative outcome
   // store. The route passes its own so a failed reply can still report it.
   const tracker = trackerIn ?? new WriteTracker();
+  // Held for every branch below, so a fallback can never widen the scope.
+  const writeScope: WriteScope = writeScopeIn ?? "any";
   const resolvedBaseUrl = baseUrl ?? "http://localhost:3000";
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
@@ -432,13 +437,13 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(retryText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "primary-retry")) : {};
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "primary-retry", writeScope)) : {};
         return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       } catch {
         const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
         const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "fallback")) : {};
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "fallback", writeScope)) : {};
         return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       }
     }
@@ -451,7 +456,7 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const rawText = stripThinkTags(firstMsg.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(rawText);
     if (calls.length > 0) {
-      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "text")) : {};
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "text", writeScope)) : {};
       return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted, tracker });
     }
     return assembleTurnResult({ text: rawText, fallback: false, tracker });
@@ -477,6 +482,7 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
           message: args.message,
           writer: (path, content, message) => appendPlexFile(path, content, message, token),
           tracker,
+          scope: writeScope,
         });
         result = written.toolContent;
       } else if (fnName === "list_plex_dir") {
@@ -538,7 +544,7 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const secondText = stripThinkTags(second.choices[0].message.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(secondText);
     if (calls.length > 0) {
-      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools")) : {};
+      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools", writeScope)) : {};
       return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
     return assembleTurnResult({ text: secondText, fallback: false, requestSubmitted, tracker });
@@ -553,7 +559,7 @@ const toolSummary = toolMessages
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
       const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
       const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools-fallback")) : {};
+      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools-fallback", writeScope)) : {};
       return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
     throw err;
@@ -688,7 +694,21 @@ export async function POST(req: NextRequest) {
 
     const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
     const mode = detectMode(message, history, forceMode);
-    const activeTools = shouldUseTools(message, mode, fileRequest) ? PLEX_TOOLS : undefined;
+    const toolPlan = planTurnTools({
+      message,
+      mode,
+      fileRequest,
+      history,
+      availableNames: PLEX_TOOLS.flatMap((tool) => (tool.function ? [tool.function.name] : [])),
+    });
+    const activeTools = toolPlan.kind === "none"
+      ? undefined
+      : PLEX_TOOLS.filter((tool) => {
+          const name = tool.function?.name;
+          return name !== undefined && toolPlan.names.includes(name);
+        });
+    // Only an acceptance turn narrows writes; explicit turns keep scope "any".
+    const writeScope: WriteScope = toolPlan.kind === "sediment-acceptance" ? "daily-sediment" : "any";
 const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;
     const effectiveBasePrompt = contextLoaded ? basePrompt : basePrompt + PLEX_CONTEXT_MISSING_NOTE;
 
@@ -717,7 +737,7 @@ let response: string;
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
     } else {
-      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools, writeTracker);
+      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools, writeTracker, writeScope);
       response = result.text;
       fallback = result.fallback;
       requestSubmitted = result.requestSubmitted;

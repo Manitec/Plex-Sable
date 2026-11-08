@@ -431,6 +431,95 @@ test("write outcome: an error payload with no attempted write stays empty", () =
   assert.deepEqual(payload, { error: "Plex unavailable", writeOutcomes: [] });
 });
 
+test("write outcome: acceptance scope rejects a non-sediment destination before any I/O", async () => {
+  const tracker = new WriteTracker();
+  let calls = 0;
+  const writer = async (...args) => {
+    calls += 1;
+    return okResult(args[0]);
+  };
+
+  const out = await runWrite({
+    callId: "call_scope",
+    path: "plex-is.txt",
+    content: "AMENDMENT",
+    writer,
+    tracker,
+    scope: "daily-sediment",
+  });
+
+  assert.equal(calls, 0, "the writer is never reached for an out-of-scope destination");
+  assert.equal(out.outcome.status, "rejected");
+  assert.equal(out.outcome.code, "invalid-path");
+  assert.match(out.toolContent, /Write failed/);
+  assert.equal(tracker.outcomes.length, 1);
+
+  // The attempt was still claimed, so an identical rescued command cannot retry.
+  await executeRescuedCalls(
+    [{ name: "write_plex_file", args: { path: "plex-is.txt", content: "AMENDMENT" } }],
+    {
+      writeFile: writer,
+      submitRequest: async () => {},
+      tracker,
+      writeScope: "daily-sediment",
+    }
+  );
+
+  assert.equal(calls, 0, "a replay must not call the writer either");
+  assert.equal(tracker.outcomes.length, 1, "no second outcome is recorded");
+  assert.equal(tracker.suppressedDuplicates, 1);
+});
+
+test("write outcome: a rescued out-of-scope write is rejected in every batch", async () => {
+  for (const batch of ["primary-retry", "fallback", "text", "after-tools", "after-tools-fallback"]) {
+    const tracker = new WriteTracker();
+    let calls = 0;
+
+    await executeRescuedCalls(
+      [
+        { name: "write_plex_file", args: { path: "plex-is.txt", content: "A" } },
+        { name: "write_plex_file", args: { path: "notes/scratch.md", content: "B" } },
+      ],
+      {
+        writeFile: async () => {
+          calls += 1;
+          return okResult("unused.md");
+        },
+        submitRequest: async () => {},
+        tracker,
+        writeScope: "daily-sediment",
+        batch,
+      }
+    );
+
+    assert.equal(calls, 0, batch);
+    assert.equal(tracker.outcomes.length, 2, batch);
+    assert.deepEqual(tracker.outcomes.map((o) => o.code), ["invalid-path", "invalid-path"], batch);
+    assert.equal(tracker.outcomes.every((o) => o.status === "rejected"), true, batch);
+  }
+});
+
+test("write outcome: a daily sediment path still executes under acceptance scope", async () => {
+  const tracker = new WriteTracker();
+  let calls = 0;
+
+  const out = await runWrite({
+    callId: "call_ok",
+    path: "sediment/2026-11-08.md",
+    content: "ENTRY",
+    writer: async () => {
+      calls += 1;
+      return okResult("sediment/2026-11-08.md");
+    },
+    tracker,
+    scope: "daily-sediment",
+  });
+
+  assert.equal(calls, 1);
+  assert.equal(out.outcome.status, "confirmed");
+  assert.equal(tracker.outcomes.length, 1);
+});
+
 test("write outcome: appendPlexFile maps read and PUT failures to codes", async () => {
   const readOk = () => jsonResponse({ content: b64("A-ENTRY"), sha: "sha-1" });
   const cases = [

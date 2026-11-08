@@ -205,6 +205,7 @@ export async function runWrite(input: {
   message?: unknown;
   writer: WriteFileFn;
   tracker: WriteTracker;
+  scope?: WriteScope;
 }): Promise<{ toolContent: string; outcome?: WriteOutcome }> {
   const { callId, tracker, writer } = input;
 
@@ -228,6 +229,20 @@ export async function runWrite(input: {
   tracker.remember(canonicalWriteKey(canonical, content));
 
   if (normalized.error || !rawPath || !content) {
+    const outcome = writeOutcomeFromResult({
+      result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
+      source: "structured",
+      callId,
+    });
+    tracker.add(outcome);
+    logWriteOutcome(outcome);
+    return { toolContent: toolTextForOutcome(outcome), outcome };
+  }
+
+  // Scope is checked AFTER the content key was recorded, so a scope rejection
+  // still counts as the attempt and an identical rescued replay stays
+  // suppressed. The writer is never called for an out-of-scope destination.
+  if (input.scope === "daily-sediment" && !isDailySedimentPath(canonical)) {
     const outcome = writeOutcomeFromResult({
       result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
       source: "structured",
@@ -445,6 +460,119 @@ export function shouldUseTools(message: string, mode: string, fileRequest: FileR
   return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
 }
 
+// ─── Sediment-save acceptance ────────────────────────────────────────────────
+
+export type GateHistoryEntry = { role: string; content: string };
+export type WriteScope = "any" | "daily-sediment";
+export const SAVE_ACCEPTANCE_TOOL_NAME = "write_plex_file";
+
+const DAILY_SEDIMENT_PATH = /^sediment\/\d{4}-\d{2}-\d{2}\.md$/;
+
+export function isDailySedimentPath(canonicalPath: string): boolean {
+  return DAILY_SEDIMENT_PATH.test(cleanPath(canonicalPath));
+}
+
+const ACCEPTANCE_REPLIES = new Set([
+  "please do",
+  "please",
+  "yes",
+  "yes please",
+  "go ahead",
+  "go for it",
+  "do it",
+  "sure",
+  "ok",
+  "okay",
+]);
+
+// Ambiguous assent targets stay closed: negation, withdrawal, alternatives and
+// multi-action offers. Screened per offer SENTENCE (plus the sentence after it),
+// so background conversation — "run a test, look over the logs", "not the final
+// destination" — cannot veto an offer it merely describes.
+const AMBIGUOUS_OFFER = /\b(?:no|not|never|but|or|and|also|then|instead|rather|unless|maybe|perhaps|cancel|stop|wait|later)\b|n't/;
+
+// Anchored forms only: an offer marker plus an explicit sediment destination.
+// This is deliberately NOT a general save/file/memory matcher — identity,
+// dream, archive and arbitrary-file offers fall through untouched.
+const SEDIMENT_OFFER_FORMS = [
+  /\bi can (?:note|record|append|add|write|log|save)\b[^.!?\n]{0,90}?\b(?:in|into|to)\s+(?:my|the)\s+sediment\b/,
+  /\b(?:i could|i'll|i will|let me|shall i|should i|would you like me to)\s+(?:note|record|append|add|write|log|save)\b[^.!?\n]{0,90}?\b(?:in|into|to)\s+(?:my|the)\s+sediment\b/,
+  /\b(?:append|add|record|note|write|log)\b[^.!?\n]{0,50}?\b(?:a|an|the|today'?s)?\s*sediment\s+entry\b/,
+];
+
+// A quoted entry TITLE in any shape Plex actually writes — 'Repair checkpoint',
+// "Repair checkpoint", “Repair checkpoint” — optionally inside markdown bold.
+// Titles must be stripped before screening (their words are not the offer's),
+// while apostrophes inside prose ("you'd", "I’m") are not titles: an opening
+// quote has to follow whitespace or punctuation.
+const QUOTED_TITLE = /(^|[\s,:;(\[*])(?:"[^"\n]{1,120}"|“[^”\n]{1,120}”|'[^'\n]{1,120}')(?=[\s,.;:!?)\]*]|$)/g;
+
+function stripQuotedTitles(text: string): string {
+  return text.replace(QUOTED_TITLE, "$1 ");
+}
+
+const SENTENCE_BREAK = /(?<=[.!?])\s+/;
+
+function looksLikeSedimentOffer(text: string): boolean {
+  const lower = text.toLowerCase();
+  // A fenced/inline code span, blockquote or raw markup is not an offer to Joe.
+  // Double quotes are NOT disqualifying: they quote the entry title.
+  if (/[`<>\n\r]/.test(lower)) return false;
+
+  // An unpaired double quote means prose and quoted example cannot be told
+  // apart, so fail closed rather than accept an offer that is being quoted.
+  if ((lower.match(/"/g) ?? []).length % 2 === 1) return false;
+
+  const sentences = stripQuotedTitles(lower).split(SENTENCE_BREAK);
+  for (let i = 0; i < sentences.length; i += 1) {
+    const sentence = sentences[i] ?? "";
+    if (!SEDIMENT_OFFER_FORMS.some((form) => form.test(sentence))) continue;
+    const window = `${sentence} ${sentences[i + 1] ?? ""}`;
+    if (AMBIGUOUS_OFFER.test(window)) continue;
+    return true;
+  }
+  return false;
+}
+
+export function isSedimentOfferAcceptance(message: string, history: GateHistoryEntry[]): boolean {
+  const reply = typeof message === "string"
+    ? message.toLowerCase().trim().replace(/^[^a-z]+|[^a-z]+$/g, "").replace(/\s+/g, " ")
+    : "";
+  if (!ACCEPTANCE_REPLIES.has(reply)) return false;
+
+  // Only the immediately preceding stored turn, never an older one. The current
+  // user message is not part of the history passed in by the route.
+  const last = history[history.length - 1];
+  if (!last || typeof last.content !== "string") return false;
+  if (last.role !== "plex" && last.role !== "assistant") return false;
+  return looksLikeSedimentOffer(last.content);
+}
+
+export type TurnToolPlan =
+  | { kind: "none" }
+  | { kind: "explicit"; names: string[] }
+  | { kind: "sediment-acceptance"; names: string[]; writeScope: "daily-sediment" };
+
+// Pure decision: which existing tool names this turn may offer, and how wide its
+// writes may be. Route wiring only maps names onto PLEX_TOOLS; it holds no
+// policy of its own.
+export function planTurnTools(input: {
+  message: string;
+  mode: string;
+  fileRequest: FileRequest | null;
+  history: GateHistoryEntry[];
+  availableNames: string[];
+}): TurnToolPlan {
+  if (shouldUseTools(input.message, input.mode, input.fileRequest)) {
+    return { kind: "explicit", names: [...input.availableNames] };
+  }
+  if (isSedimentOfferAcceptance(input.message, input.history)) {
+    const names = input.availableNames.filter((name) => name === SAVE_ACCEPTANCE_TOOL_NAME);
+    if (names.length > 0) return { kind: "sediment-acceptance", names, writeScope: "daily-sediment" };
+  }
+  return { kind: "none" };
+}
+
 export interface RescuedCall {
   name: string;
   args: Record<string, any>;
@@ -472,6 +600,7 @@ export interface RescueDeps {
   submitRequest: (request: string, notes: string) => Promise<void>;
   tracker: WriteTracker;
   batch?: string;
+  writeScope?: WriteScope;
 }
 
 export async function executeRescuedCalls(calls: RescuedCall[], deps: RescueDeps): Promise<{ requestSubmitted?: string }> {
@@ -492,6 +621,19 @@ export async function executeRescuedCalls(calls: RescuedCall[], deps: RescueDeps
         // retained if the write fails or throws.
         if (!deps.tracker.claim(canonicalWriteKey(canonical, content))) {
           deps.tracker.markSuppressed();
+          continue;
+        }
+
+        // The claim above means an out-of-scope attempt is still counted as the
+        // attempt, so it cannot be retried, and the writer is never reached.
+        if (deps.writeScope === "daily-sediment" && !isDailySedimentPath(canonical)) {
+          const outcome = writeOutcomeFromResult({
+            result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
+            source: "rescued",
+            callId,
+          });
+          deps.tracker.add(outcome);
+          logWriteOutcome(outcome);
           continue;
         }
 
