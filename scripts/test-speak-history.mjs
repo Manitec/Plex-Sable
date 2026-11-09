@@ -135,7 +135,7 @@ function withBaseContext(repo) {
 }
 
 function harness({ stored = [], failWrite = false, fallback = false, token = '', model = null, repository = null } = {}) {
-  const state = { reads: 0, writes: [], calls: [] };
+  const state = { reads: 0, writes: [], calls: [], requestCreations: [] };
   const db = {
     doc(path) {
       if (path.startsWith('plex_sessions/')) return {
@@ -144,7 +144,12 @@ function harness({ stored = [], failWrite = false, fallback = false, token = '',
       };
       return { async get() { return { exists: false }; } };
     },
-    collection() { return { doc() { return { collection() { return { async add() {} }; } }; }, async add() {} }; },
+    collection(name) {
+      // ONE queue writes are RECORDED, not swallowed: a blocked rescued action
+      // must be provable, so a no-op stub would hide the side effect.
+      const add = async (data) => { state.requestCreations.push({ collection: name, data }); };
+      return { doc() { return { collection() { return { add }; } }; }, add };
+    },
   };
   const repo = repository ?? fakeRepo();
   const network = { requests: [], unexpected: [] };
@@ -359,6 +364,30 @@ for (const voice of ['nyx', 'hex', 'mani']) {
   assert.equal(repo.writes.length, 0);
   assert.equal(repo.putAttempts.length, 0);
   assertNoUnexpected(h.network, 'no write attempted');
+}
+
+// 6. Acceptance must not enable a rescued submit_request side effect.
+{
+  const repo = withBaseContext(fakeRepo());
+  const h = harness({
+    stored: [{ role: 'plex', content: OFFER }],
+    token: 'dummy-token',
+    model: [{ response: plain('<function=submit_request>{"request":"promote me","notes":"n"}</function>') }],
+    repository: repo,
+  });
+  const r = await h.send({ message: 'Please do.' });
+  assert.equal(r.status, 200);
+  assert.equal(
+    h.state.requestCreations.filter((entry) => entry.collection === 'one_requests').length,
+    0,
+    'accepting a sediment offer must not create a ONE request'
+  );
+  assert.equal(repo.putAttempts.length, 0, 'a rescued submit_request writes nothing');
+  assert.equal(repo.writes.length, 0);
+  assert.equal(r.data.writeOutcomes.length, 0, 'no write outcome is invented');
+  assert.equal(r.data.requestSubmitted, null);
+  assert.equal(String(r.data.response).includes('<function='), false, 'the rescued call is stripped from the reply');
+  assertNoUnexpected(h.network, 'rescued submit_request blocked');
 }
 
 console.log('Mocked speak history and write-path route checks passed; no real model or Firestore calls.');

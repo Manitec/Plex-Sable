@@ -20,6 +20,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Node 22.18+ strips TypeScript types by default, which the module suites
+      # rely on when they import src/lib/*.ts directly.
+      - run: node --test test/*.test.mjs
       - run: node scripts/test-session-history.mjs
       - run: node scripts/test-speak-history.mjs
       - run: npx --no-install tsc --noEmit

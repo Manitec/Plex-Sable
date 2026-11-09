@@ -195,6 +195,37 @@ function toolTextForOutcome(outcome: WriteOutcome): string {
 
 export type WriteFileFn = (path: string, content: string, message: string) => Promise<WriteResult>;
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export type WriteArguments = {
+  canonical: string;
+  rawPath: string;
+  content: string;
+  message: string;
+  valid: boolean;
+};
+
+// Shared argument validation for BOTH channels. Structured and rescued writes
+// arrive through different code, but the same rules decide whether they may
+// reach the writer: path and content must be present, strings, and not blank,
+// and the path must normalize without error. Content is returned exactly as
+// given (never trimmed), so meaningful entry text survives untouched.
+export function checkWriteArguments(input: {
+  path: unknown;
+  content: unknown;
+  message?: unknown;
+  defaultMessage: string;
+}): WriteArguments {
+  const rawPath = typeof input.path === "string" ? input.path : "";
+  const content = typeof input.content === "string" ? input.content : "";
+  const normalized = normalizePlexArchivePath(rawPath);
+  const message = typeof input.message === "string" && input.message ? input.message : input.defaultMessage;
+  const valid = rawPath.trim().length > 0 && !normalized.error && content.trim().length > 0;
+  return { canonical: normalized.path, rawPath, content, message, valid };
+}
+
 // Structured write execution. Records the canonical content key BEFORE awaiting
 // the writer and retains that claim if the writer throws, so a later rescued
 // re-emission cannot become an automatic retry.
@@ -218,33 +249,23 @@ export async function runWrite(input: {
     return { toolContent: `Write not executed again: this request already attempted a write to ${where} (${state}).` };
   }
 
-  const rawPath = typeof input.path === "string" ? input.path : "";
-  const content = typeof input.content === "string" ? input.content : "";
-  const message = typeof input.message === "string" && input.message ? input.message : "plex: write";
-  const normalized = normalizePlexArchivePath(rawPath);
-  const canonical = normalized.path;
+  const args = checkWriteArguments({
+    path: input.path,
+    content: input.content,
+    message: input.message,
+    defaultMessage: "plex: write",
+  });
 
   // Recorded before any validation or writer await, so a replay is suppressed
   // even when this attempt is rejected without reaching the writer.
-  tracker.remember(canonicalWriteKey(canonical, content));
+  tracker.remember(canonicalWriteKey(args.canonical, args.content));
 
-  if (normalized.error || !rawPath || !content) {
+  // Invalid arguments and out-of-scope destinations share one rejection path,
+  // AFTER the content key was recorded: the attempt still counts, so an
+  // identical rescued replay stays suppressed, and the writer is never called.
+  if (!args.valid || !isWritePathPermitted(args.canonical, input.scope)) {
     const outcome = writeOutcomeFromResult({
-      result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
-      source: "structured",
-      callId,
-    });
-    tracker.add(outcome);
-    logWriteOutcome(outcome);
-    return { toolContent: toolTextForOutcome(outcome), outcome };
-  }
-
-  // Scope is checked AFTER the content key was recorded, so a scope rejection
-  // still counts as the attempt and an identical rescued replay stays
-  // suppressed. The writer is never called for an out-of-scope destination.
-  if (input.scope === "daily-sediment" && !isDailySedimentPath(canonical)) {
-    const outcome = writeOutcomeFromResult({
-      result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
+      result: { status: "rejected", path: args.canonical || args.rawPath, code: "invalid-path" },
       source: "structured",
       callId,
     });
@@ -255,12 +276,12 @@ export async function runWrite(input: {
 
   let result: WriteResult;
   try {
-    result = await writer(canonical, content, message);
+    result = await writer(args.canonical, args.content, args.message);
   } catch {
     // The writer threw: we never saw its result, so persistence is unknown.
     // A generic exception does NOT establish a network failure (writePlexFile
     // classifies its own fetch rejection); anything else stays `unknown`.
-    result = { status: "unknown", path: canonical, code: "unknown" };
+    result = { status: "unknown", path: args.canonical, code: "unknown" };
   }
 
   const outcome = writeOutcomeFromResult({ result, source: "structured", callId });
@@ -472,6 +493,21 @@ export function isDailySedimentPath(canonicalPath: string): boolean {
   return DAILY_SEDIMENT_PATH.test(cleanPath(canonicalPath));
 }
 
+// Which rescued side effects may run at all. Under a sediment-save acceptance
+// only the write tool may act, so accepting an offer can never turn on a
+// rescued submit_request (or any future action) that the turn did not offer.
+// Outside acceptance, rescued dispatch keeps its previous behavior.
+export function isRescuedActionPermitted(name: string, scope?: WriteScope): boolean {
+  if (scope !== "daily-sediment") return true;
+  return name === SAVE_ACCEPTANCE_TOOL_NAME;
+}
+
+// Which destinations may reach the writer. Path normalization and the daily
+// sediment check are shared by both write channels so they cannot drift.
+export function isWritePathPermitted(canonicalPath: string, scope?: WriteScope): boolean {
+  return scope !== "daily-sediment" || isDailySedimentPath(canonicalPath);
+}
+
 const ACCEPTANCE_REPLIES = new Set([
   "please do",
   "please",
@@ -573,9 +609,11 @@ export function planTurnTools(input: {
   return { kind: "none" };
 }
 
+// `args` is whatever the model emitted after JSON.parse: an object, null, an
+// array, or a primitive are all possible, and all of them are handled.
 export interface RescuedCall {
   name: string;
-  args: Record<string, any>;
+  args: unknown;
 }
 
 export function extractTextFunctionCalls(text: string): { cleaned: string; calls: RescuedCall[] } {
@@ -607,28 +645,41 @@ export async function executeRescuedCalls(calls: RescuedCall[], deps: RescueDeps
   let requestSubmitted: string | undefined;
 
   for (let index = 0; index < calls.length; index += 1) {
-    const { name, args } = calls[index];
+    const call = calls[index];
+    const name = typeof call?.name === "string" ? call.name : "";
     const callId = `rescued:${deps.batch ?? "text"}:${index}`;
     try {
+      // Action permission is checked BEFORE any side effect is dispatched, so an
+      // acceptance turn can never execute a rescued submit_request or any other
+      // action it did not offer.
+      if (!isRescuedActionPermitted(name, deps.writeScope)) continue;
+
+      // Malformed arguments (null, array, primitive) become an empty object and
+      // therefore fail validation instead of bypassing it.
+      const args = isPlainObject(call.args) ? call.args : {};
+
       if (name === "write_plex_file") {
-        const rawPath = typeof args.path === "string" ? args.path : "";
-        const content = typeof args.content === "string" ? args.content : "";
-        const message = typeof args.message === "string" && args.message ? args.message : "plex: write (rescued from text)";
-        const canonical = normalizePlexArchivePath(rawPath).path;
+        const checked = checkWriteArguments({
+          path: args.path,
+          content: args.content,
+          message: args.message,
+          defaultMessage: "plex: write (rescued from text)",
+        });
 
         // Claim BEFORE the writer is awaited; the commit message is not part of
         // the key, so a replay cannot slip through by changing it. The claim is
         // retained if the write fails or throws.
-        if (!deps.tracker.claim(canonicalWriteKey(canonical, content))) {
+        if (!deps.tracker.claim(canonicalWriteKey(checked.canonical, checked.content))) {
           deps.tracker.markSuppressed();
           continue;
         }
 
-        // The claim above means an out-of-scope attempt is still counted as the
-        // attempt, so it cannot be retried, and the writer is never reached.
-        if (deps.writeScope === "daily-sediment" && !isDailySedimentPath(canonical)) {
+        // The claim above means an invalid or out-of-scope attempt is still
+        // counted as the attempt, so it cannot be retried, and the writer is
+        // never reached.
+        if (!checked.valid || !isWritePathPermitted(checked.canonical, deps.writeScope)) {
           const outcome = writeOutcomeFromResult({
-            result: { status: "rejected", path: canonical || rawPath, code: "invalid-path" },
+            result: { status: "rejected", path: checked.canonical || checked.rawPath, code: "invalid-path" },
             source: "rescued",
             callId,
           });
@@ -639,19 +690,23 @@ export async function executeRescuedCalls(calls: RescuedCall[], deps: RescueDeps
 
         let result: WriteResult;
         try {
-          result = await deps.writeFile(canonical, content, message);
+          result = await deps.writeFile(checked.canonical, checked.content, checked.message);
         } catch {
           // Conservative: an unclassified throw is not evidence of a network
           // failure, only that the outcome is unconfirmed.
-          result = { status: "unknown", path: canonical, code: "unknown" };
+          result = { status: "unknown", path: checked.canonical, code: "unknown" };
         }
 
         const outcome = writeOutcomeFromResult({ result, source: "rescued", callId });
         deps.tracker.add(outcome);
         logWriteOutcome(outcome);
       } else if (name === "submit_request") {
-        await deps.submitRequest(args.request ?? "", args.notes ?? "");
-        requestSubmitted = args.request;
+        // A malformed request never becomes an empty ONE entry.
+        const request = typeof args.request === "string" ? args.request : "";
+        const notes = typeof args.notes === "string" ? args.notes : "";
+        if (!request.trim()) continue;
+        await deps.submitRequest(request, notes);
+        requestSubmitted = request;
       }
       // read / list / recall / etc. cannot inject results in rescue path — skip
     } catch { /* best-effort */ }
