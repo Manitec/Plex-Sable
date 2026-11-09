@@ -1,9 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, type Firestore } from 'firebase-admin/firestore';
+import {
+  deleteRequest,
+  readQueue,
+  updateRequest,
+  type RequestStorage,
+} from '@/lib/one-requests';
 
 async function safeGet(fn: () => Promise<any>, fallback: any) {
   try { return await fn(); } catch { return fallback; }
+}
+
+/**
+ * Adapter from the request service to Firestore.
+ *
+ * `updatedAt` is applied here so the service only has to describe the intent.
+ * `remove` uses Firestore's delete, which is idempotent — absence is checked by
+ * the service before this is called.
+ */
+function requestStorage(db: Firestore): RequestStorage {
+  return {
+    async listRecent(limit) {
+      const snap = await db.collection('one_requests').orderBy('createdAt', 'desc').limit(limit).get();
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+    async exists(id) {
+      const snap = await db.doc(`one_requests/${id}`).get();
+      return snap.exists;
+    },
+    async update(id, patch) {
+      await db.doc(`one_requests/${id}`).update({
+        ...patch,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    },
+    async remove(id) {
+      await db.doc(`one_requests/${id}`).delete();
+    },
+  };
 }
 
 export async function GET(req: NextRequest) {
@@ -45,7 +80,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ log });
   }
 
-  const [sediment, autonomy, requests, log, voices] = await Promise.all([
+  // The queue is read through the service so a read failure stays
+  // distinguishable from a genuinely empty queue. The other sections keep
+  // their previous behaviour so existing consumers are unaffected.
+  const [sediment, autonomy, queue, log, voices] = await Promise.all([
     safeGet(async () => {
       const snap = await db.doc('plex_sediment/current').get();
       return snap.exists ? snap.data()?.state ?? 'neutral' : 'neutral';
@@ -54,10 +92,7 @@ export async function GET(req: NextRequest) {
       const snap = await db.doc('one_governance/autonomy').get();
       return snap.exists ? snap.data() : { level: 1, label: 'observe' };
     }, { level: 1, label: 'observe' }),
-    safeGet(async () => {
-      const snap = await db.collection('one_requests').orderBy('createdAt', 'desc').limit(50).get();
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    }, []),
+    readQueue(requestStorage(db)),
     safeGet(async () => {
       const snap = await db.collection('one_log').orderBy('timestamp', 'desc').limit(20).get();
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -68,7 +103,15 @@ export async function GET(req: NextRequest) {
     }, null),
   ]);
 
-  return NextResponse.json({ sediment, autonomy, eckoFragments: [], requests, log, voices });
+  return NextResponse.json({
+    sediment,
+    autonomy,
+    eckoFragments: [],
+    requests: queue.requests,
+    log,
+    voices,
+    ...(queue.requestsError ? { requestsError: queue.requestsError } : {}),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -165,20 +208,13 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'update_request') {
-    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    const update: Record<string, any> = {
-      status: body.status,
-      updatedAt: FieldValue.serverTimestamp(),
-    };
-    if (body.notes !== undefined) update.notes = body.notes;
-    await safeGet(() => db.doc(`one_requests/${body.id}`).update(update), null);
-    return NextResponse.json({ ok: true });
+    const outcome = await updateRequest(requestStorage(db), (body ?? {}) as Record<string, unknown>);
+    return NextResponse.json(outcome.body, { status: outcome.httpStatus });
   }
 
   if (action === 'delete_request') {
-    if (!body.id) return NextResponse.json({ error: 'missing id' }, { status: 400 });
-    await safeGet(() => db.doc(`one_requests/${body.id}`).delete(), null);
-    return NextResponse.json({ ok: true });
+    const outcome = await deleteRequest(requestStorage(db), (body ?? {}) as Record<string, unknown>);
+    return NextResponse.json(outcome.body, { status: outcome.httpStatus });
   }
 
   return NextResponse.json({ error: 'unknown action' }, { status: 400 });
