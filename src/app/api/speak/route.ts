@@ -5,6 +5,23 @@ import { getAdminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 import { makeGroq } from "@/lib/plex-identity";
 import { selectSessionHistory, toModelHistoryRole, type SessionHistorySelection } from "@/lib/session-history";
+import {
+  appendPlexFile,
+  assembleErrorResult,
+  assembleTurnResult,
+  cleanPath,
+  executeRescuedCalls,
+  extractTextFunctionCalls,
+  fetchPlexFile,
+  isActiveContextFileRequest,
+  planTurnTools,
+  runWrite,
+  WriteTracker,
+  type FileRequest,
+  type RescueDeps,
+  type WriteScope,
+} from "@/lib/plex-runtime";
+import type { TurnResult, WriteOutcome } from "@/lib/write-outcome";
 
 const PLEX_REPO_OWNER = "Manitec";
 const PLEX_REPO_NAME = "plex";
@@ -73,33 +90,6 @@ if (msg.includes("model_not_found") || msg.includes("does not exist")) return "m
 if (isRateLimit(err)) return "rate_limit";
 return "unknown";
 }
-function cleanPath(path: string): string {
-  return path.replace(/^\/+/, "");
-}
-function normalizePlexArchivePath(path: string): { path: string; error?: string } {
-  const cleaned = cleanPath(path);
-  if (cleaned.startsWith("plex/sediment/")) {
-    return { path: `sediment/${cleaned.slice("plex/sediment/".length)}` };
-  }
-  if (cleaned.startsWith("plex/dreams/")) {
-    return { path: `dreams/${cleaned.slice("plex/dreams/".length)}` };
-  }
-  if (cleaned.startsWith("sediment/") || cleaned.startsWith("dreams/")) {
-    return { path: cleaned };
-  }
-  if (cleaned.includes("/sediment/") || cleaned.includes("/dreams/")) {
-    return { path: cleaned, error: "Invalid archive path. Use sediment/YYYY-MM-DD.md or dreams/YYYY-MM-DD.md." };
-  }
-  return { path: cleaned };
-}
-function isAppendOnlyPath(path: string): boolean {
-  const p = cleanPath(path);
-  return /^sediment\/\d{4}-\d{2}-\d{2}\.md$/.test(p) || /^dreams\/\d{4}-\d{2}-\d{2}\.md$/.test(p);
-}
-function isIdentityPath(path: string): boolean {
-  const p = cleanPath(path);
-  return p === "plex-is.txt" || p === "plex-def.txt";
-}
 function tail(s: string | null, maxChars: number): string | null {
   if (!s) return null;
   return s.length <= maxChars ? s : s.slice(-maxChars);
@@ -123,81 +113,6 @@ async function callLMStudio(messages: { role: string; content: string }[]): Prom
   if (!res.ok) throw new Error(`LM Studio error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices?.[0]?.message?.content ?? "";
-}
-
-async function fetchPlexFile(path: string, token: string): Promise<string | null> {
-  try {
-    const safePath = cleanPath(path);
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }, cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Buffer.from(data.content, "base64").toString("utf-8").trim();
-  } catch {
-    return null;
-  }
-}
-
-async function getPlexFileSha(path: string, token: string): Promise<string | null> {
-  try {
-    const safePath = cleanPath(path);
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}?ref=${PLEX_REPO_BRANCH}`,
-      { headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" }, cache: "no-store" }
-    );
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.sha ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function writePlexFile(path: string, content: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const safePath = cleanPath(path);
-    const existingSha = await getPlexFileSha(safePath, token);
-    const body: any = { message, content: Buffer.from(content, "utf-8").toString("base64"), branch: PLEX_REPO_BRANCH };
-    if (existingSha) body.sha = existingSha;
-    const res = await fetch(
-      `https://api.github.com/repos/${PLEX_REPO_OWNER}/${PLEX_REPO_NAME}/contents/${safePath}`,
-      { method: "PUT", headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" }
-    );
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      return { ok: false, error: err?.message ?? `HTTP ${res.status}` };
-    }
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: e?.message ?? "unknown error" };
-  }
-}
-
-async function appendPlexFile(path: string, newEntry: string, message: string, token: string): Promise<{ ok: boolean; error?: string }> {
-  const normalized = normalizePlexArchivePath(path);
-  if (normalized.error) return { ok: false, error: normalized.error };
-  const safePath = normalized.path;
-
-  // Identity files can only be amended — never blanked or fully replaced by temporary dumps
-  if (isIdentityPath(safePath)) {
-    const existing = (await fetchPlexFile(safePath, token)) ?? "";
-    const trimmedNew = newEntry.trim();
-    if (trimmedNew.length < 80 && existing.length > 200) {
-      return { ok: false, error: "Identity file write rejected: content too short / looks like temporary emotion dump. Amend only when something genuinely shifts." };
-    }
-    const combined = existing ? `${existing.trim()}\n\n---\n${trimmedNew}` : trimmedNew;
-    return writePlexFile(safePath, combined, message, token);
-  }
-
-  if (isAppendOnlyPath(safePath)) {
-    const existing = (await fetchPlexFile(safePath, token)) ?? "";
-    const combined = existing ? `${existing}\n\n${newEntry}` : newEntry;
-    return writePlexFile(safePath, combined, message, token);
-  }
-
-  return writePlexFile(safePath, newEntry, message, token);
 }
 
 async function listPlexDir(path: string, token: string): Promise<string | null> {
@@ -320,8 +235,6 @@ function extractExplicitPath(message: string): string | null {
   return null;
 }
 
-type FileRequest = { type: "file"; path: string } | { type: "dir"; path: string };
-
 function detectFileRequest(message: string): FileRequest | null {
   const m = message.toLowerCase().trim();
   const explicit = extractExplicitPath(message);
@@ -341,16 +254,6 @@ function detectFileRequest(message: string): FileRequest | null {
   }
   if (/read (your )?repo|list (your )?files|what.s in/.test(m)) return { type: "dir", path: "" };
   return null;
-}
-
-function isActiveContextFileRequest(req: FileRequest | null): boolean {
-  return req?.type === "file" && ["prompts/base.md", "plex-is.txt", "plex-def.txt"].includes(cleanPath(req.path));
-}
-
-function shouldUseTools(message: string, mode: string, fileRequest: FileRequest | null): boolean {
-  if (fileRequest && !isActiveContextFileRequest(fileRequest)) return true;
-  if (mode === "operational" || mode === "synthesis") return true;
-  return /\b(read|open|show|load|check|list|write|save|append|recall|remember|submit|request|search|research|find|build|fix|code|deploy|audit|repo|repository|file|sediment|dream)\b/i.test(message);
 }
 
 async function resolvePrefetch(req: FileRequest, token: string): Promise<string> {
@@ -396,45 +299,25 @@ async function runMind(question: string, context: string, baseUrl: string): Prom
   }
 }
 
-// ─── Text-mode function call rescue ──────────────────────────────────────────
-interface RescuedCall {
-  name: string;
-  args: Record<string, any>;
-}
-
-function extractTextFunctionCalls(text: string): { cleaned: string; calls: RescuedCall[] } {
-  const calls: RescuedCall[] = [];
-  const pattern = /<function=([a-zA-Z_]+)>([\s\S]*?)<\/function>/g;
-  const cleaned = text.replace(pattern, (_match, name, argsRaw) => {
-    try {
-      const args = JSON.parse(argsRaw.trim());
-      calls.push({ name, args });
-    } catch { /* skip unparseable */ }
-    return "";
-  }).trim();
-  return { cleaned, calls };
-}
-
-async function executeRescuedCalls(calls: RescuedCall[], token: string): Promise<{ requestSubmitted?: string }> {
-  let requestSubmitted: string | undefined;
-  for (const { name, args } of calls) {
-    try {
-      if (name === "write_plex_file") {
-        await appendPlexFile(args.path, args.content, args.message ?? "plex: write (rescued from text)", token);
-      } else if (name === "submit_request") {
-        await getAdminDb().collection("one_requests").add({
-          request: args.request ?? "",
-          notes: args.notes ?? "",
-          source: "plex",
-          status: "pending",
-          createdAt: FieldValue.serverTimestamp(),
-        });
-        requestSubmitted = args.request;
-      }
-      // read / list / recall / etc. cannot inject results in rescue path — skip
-    } catch { /* best-effort */ }
-  }
-  return { requestSubmitted };
+// ─── Text-mode function call rescue wiring ───────────────────────────────────
+// Execution lives in src/lib/plex-runtime.ts; this supplies its side effects so
+// the extracted module stays free of Firestore and of the Next path alias.
+function makeRescueDeps(token: string, tracker: WriteTracker, batch: string, scope: WriteScope): RescueDeps {
+  return {
+    writeFile: (path, content, message) => appendPlexFile(path, content, message, token),
+    tracker,
+    batch,
+    writeScope: scope,
+    submitRequest: async (request, notes) => {
+      await getAdminDb().collection("one_requests").add({
+        request,
+        notes,
+        source: "plex",
+        status: "pending",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    },
+  };
 }
 
 // ─── Sub-persona direct call ─────────────────────────────────────────────────
@@ -519,9 +402,16 @@ async function callGroqWithTools(
   prefetchedContext?: string,
   baseUrl?: string,
   liveBasePrompt?: string,
-  tools?: Groq.Chat.Completions.ChatCompletionTool[]
-): Promise<{ text: string; fallback: boolean; requestSubmitted?: string }> {
+  tools?: Groq.Chat.Completions.ChatCompletionTool[],
+  trackerIn?: WriteTracker,
+  writeScopeIn?: WriteScope
+): Promise<TurnResult> {
   const groq = makeGroq();
+  // One tracker per request/fallback flow; the single authoritative outcome
+  // store. The route passes its own so a failed reply can still report it.
+  const tracker = trackerIn ?? new WriteTracker();
+  // Held for every branch below, so a fallback can never widen the scope.
+  const writeScope: WriteScope = writeScopeIn ?? "any";
   const resolvedBaseUrl = baseUrl ?? "http://localhost:3000";
   const effectivePrompt = prefetchedContext
     ? `${systemPrompt}\n\n---\n## Retrieved from your repository\n${prefetchedContext}\n---`
@@ -547,14 +437,14 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
         const retry = await groqCall(groq, PRIMARY_MODEL, fallbackMsgs, { max_tokens: 800 });
         const retryText = stripThinkTags(retry.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(retryText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
-        return { text: cleaned, fallback: true, requestSubmitted };
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "primary-retry", writeScope)) : {};
+        return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       } catch {
         const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
         const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
         const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-        const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
-        return { text: cleaned, fallback: true, requestSubmitted };
+        const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "fallback", writeScope)) : {};
+        return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted, tracker });
       }
     }
     throw err;
@@ -566,10 +456,10 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const rawText = stripThinkTags(firstMsg.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(rawText);
     if (calls.length > 0) {
-      const { requestSubmitted } = token ? await executeRescuedCalls(calls, token) : {};
-      return { text: cleaned, fallback: false, requestSubmitted };
+      const { requestSubmitted } = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "text", writeScope)) : {};
+      return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted, tracker });
     }
-    return { text: rawText, fallback: false };
+    return assembleTurnResult({ text: rawText, fallback: false, tracker });
   }
 
   const toolMessages: Groq.Chat.Completions.ChatCompletionMessageParam[] = [
@@ -585,8 +475,16 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
       if (fnName === "read_plex_file") {
         result = (await fetchPlexFile(args.path, token)) ?? `No file found at ${args.path}`;
       } else if (fnName === "write_plex_file") {
-        const { ok, error } = await appendPlexFile(args.path, args.content, args.message ?? "plex: write", token);
-        result = ok ? `File written successfully: ${args.path}` : `Write failed: ${error}`;
+        const written = await runWrite({
+          callId: toolCall.id,
+          path: args.path,
+          content: args.content,
+          message: args.message,
+          writer: (path, content, message) => appendPlexFile(path, content, message, token),
+          tracker,
+          scope: writeScope,
+        });
+        result = written.toolContent;
       } else if (fnName === "list_plex_dir") {
         result = (await listPlexDir(args.path, token)) ?? `No directory found at ${args.path}`;
       } else if (fnName === "recall") {
@@ -646,10 +544,10 @@ const fallbackMsgs = buildFallbackMessages(history, message, prefetchedContext, 
     const secondText = stripThinkTags(second.choices[0].message.content ?? "");
     const { cleaned, calls } = extractTextFunctionCalls(secondText);
     if (calls.length > 0) {
-      const rescued = token ? await executeRescuedCalls(calls, token) : {};
-      return { text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
+      const rescued = token ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools", writeScope)) : {};
+      return assembleTurnResult({ text: cleaned, fallback: false, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
-    return { text: secondText, fallback: false, requestSubmitted };
+    return assembleTurnResult({ text: secondText, fallback: false, requestSubmitted, tracker });
   } catch (err: any) {
     if (isToolUseFailed(err) || isRateLimit(err) || isContextTooLong(err)) {
       console.warn("[speak-fallback]", { stage: "after_tools", reason: getFallbackReason(err), error: err?.message ?? String(err) });
@@ -661,8 +559,8 @@ const toolSummary = toolMessages
       const fallback = await groqCall(groq, FALLBACK_MODEL, fallbackMsgs, { max_tokens: 500 });
       const fallbackText = stripThinkTags(fallback.choices[0].message.content ?? "");
       const { cleaned, calls } = extractTextFunctionCalls(fallbackText);
-      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, token) : {};
-      return { text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted };
+      const rescued = token && calls.length > 0 ? await executeRescuedCalls(calls, makeRescueDeps(token, tracker, "after-tools-fallback", writeScope)) : {};
+      return assembleTurnResult({ text: cleaned, fallback: true, requestSubmitted: requestSubmitted ?? rescued.requestSubmitted, tracker });
     }
     throw err;
   }
@@ -737,6 +635,9 @@ function fireDreamNode(message: string, responseText: string, mode: string, sess
 }
 
 export async function POST(req: NextRequest) {
+  // Request-local outcome store, visible to the error path as well as the
+  // success path, so a write completed before a reply failure is not lost.
+  const writeTracker = new WriteTracker();
   try {
     const { message: rawMessage, sessionId = "joe", overrideHistory, forceMode, provider = "groq" } = await req.json();
     if (!rawMessage) return NextResponse.json({ error: "Message required" }, { status: 400 });
@@ -765,7 +666,7 @@ export async function POST(req: NextRequest) {
         content: m.content,
       }));
       const reply = await callSubPersona(voiceParam, message, subHistory);
-      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null });
+      return NextResponse.json({ response: reply, mode: voiceParam, fallback: false, requestSubmitted: null, writeOutcomes: [] });
     }
 
     const token = process.env.PLEX_SEDIMENT_TOKEN ?? "";
@@ -793,7 +694,21 @@ export async function POST(req: NextRequest) {
 
     const sediment = sedimentSnap.exists ? sedimentSnap.data()?.state ?? "neutral" : "neutral";
     const mode = detectMode(message, history, forceMode);
-    const activeTools = shouldUseTools(message, mode, fileRequest) ? PLEX_TOOLS : undefined;
+    const toolPlan = planTurnTools({
+      message,
+      mode,
+      fileRequest,
+      history,
+      availableNames: PLEX_TOOLS.flatMap((tool) => (tool.function ? [tool.function.name] : [])),
+    });
+    const activeTools = toolPlan.kind === "none"
+      ? undefined
+      : PLEX_TOOLS.filter((tool) => {
+          const name = tool.function?.name;
+          return name !== undefined && toolPlan.names.includes(name);
+        });
+    // Only an acceptance turn narrows writes; explicit turns keep scope "any".
+    const writeScope: WriteScope = toolPlan.kind === "sediment-acceptance" ? "daily-sediment" : "any";
 const { basePrompt, context: plexContext, contextLoaded, baseLoaded } = plexLoaded;
     const effectiveBasePrompt = contextLoaded ? basePrompt : basePrompt + PLEX_CONTEXT_MISSING_NOTE;
 
@@ -812,6 +727,7 @@ console.info("[speak-context]", { basePromptChars: basePrompt.length, plexContex
 let response: string;
     let fallback = false;
     let requestSubmitted: string | undefined;
+    let writeOutcomes: WriteOutcome[] = [];
 
     if (provider === "lmstudio") {
       const lmMessages: { role: string; content: string }[] = [
@@ -821,10 +737,11 @@ let response: string;
       ];
       response = stripThinkTags(await callLMStudio(lmMessages));
     } else {
-      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools);
+      const result = await callGroqWithTools(fullPrompt, history, message, token, prefetchedContext, baseUrl, basePrompt, activeTools, writeTracker, writeScope);
       response = result.text;
       fallback = result.fallback;
       requestSubmitted = result.requestSubmitted;
+      writeOutcomes = result.writeOutcomes;
     }
 
     if (historySelection.kind === "stored") {
@@ -845,10 +762,14 @@ let response: string;
       contextLoaded,
       baseLoaded,
       requestSubmitted: requestSubmitted ?? null,
+      writeOutcomes,
       provider: provider === "lmstudio" ? "lmstudio" : "groq",
     });
-  } catch (err: any) {
-    console.error("Speak route error FULL:", err?.message ?? String(err));
-    return NextResponse.json({ error: "Plex unavailable", detail: err?.message ?? String(err) }, { status: 500 });
+  } catch {
+    // Response-generation failure, not a persistence failure: keep the real
+    // outcomes and a fixed message. The diagnostic is fixed too — no raw
+    // exception, response body, credentials or model content is logged.
+    console.error("[speak] Speak response generation failed");
+    return NextResponse.json(assembleErrorResult({ message: "Plex unavailable", tracker: writeTracker }), { status: 500 });
   }
 }

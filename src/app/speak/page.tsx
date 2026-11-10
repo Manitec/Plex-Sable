@@ -2,8 +2,9 @@
 import { useState, useRef, useEffect } from 'react';
 import Nav from '@/components/Nav';
 import Footer from '@/components/Footer';
+import type { WriteOutcome } from '@/lib/write-outcome';
 
-type Message = { role: 'user' | 'plex'; content: string; fallback?: boolean };
+type Message = { role: 'user' | 'plex'; content: string; fallback?: boolean; writeOutcomes?: WriteOutcome[] };
 type Provider = 'groq' | 'lmstudio';
 
 export default function SpeakPage() {
@@ -30,9 +31,13 @@ export default function SpeakPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg, sessionId: 'joe', provider })
       });
-      const data = await res.json();
-      setMessages(prev => [...prev, { role: 'plex', content: data.response ?? data.error, fallback: data.fallback ?? false }]);
-      setMode(data.mode ?? '');
+      // Parse defensively: an error response may not be JSON, and outcomes must
+      // survive a non-2xx reply or one that carries error instead of response.
+      const data = await res.json().catch(() => null);
+      const writeOutcomes: WriteOutcome[] = Array.isArray(data?.writeOutcomes) ? data.writeOutcomes : [];
+      const content = data?.response ?? data?.error ?? (res.ok ? '' : 'plex unavailable');
+      setMessages(prev => [...prev, { role: 'plex', content, fallback: data?.fallback ?? false, writeOutcomes }]);
+      setMode(data?.mode ?? '');
     } catch {
       setMessages(prev => [...prev, { role: 'plex', content: 'something went quiet.' }]);
     } finally {
@@ -90,6 +95,19 @@ export default function SpeakPage() {
                   marginTop: '0.1rem'
                 }}>⚠ thin voice</div>
               )}
+              {/* Only server-confirmed failures are shown. A confirmed write is
+                  silent, and an empty writeOutcomes means no recorded execution
+                  outcome — not that nothing was saved. */}
+              {m.role === 'plex' && (m.writeOutcomes ?? []).filter(o => o.status !== 'confirmed').map((o, j) => (
+                <div key={`write-${j}`} title={o.message} style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '0.55rem',
+                  letterSpacing: '0.08em',
+                  color: 'var(--muted)',
+                  opacity: 0.45,
+                  marginTop: '0.1rem'
+                }}>⚠ {o.status === 'rejected' ? 'not saved' : 'unconfirmed'} · {o.path}</div>
+              ))}
             </div>
           ))}
           {loading && (
