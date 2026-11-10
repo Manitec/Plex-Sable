@@ -306,9 +306,7 @@ function weavePlexSediment(
 function authorized(req: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET ?? '';
   const authHeader = req.headers.get('authorization') ?? '';
-  const vercelCron = req.headers.get('x-vercel-cron') ?? '';
 
-  if (vercelCron === '1') return true;
   if (cronSecret && authHeader === `Bearer ${cronSecret}`) return true;
   if (!cronSecret && process.env.NODE_ENV === 'development') return true;
 

@@ -6,20 +6,28 @@ function isApiRequest(request: NextRequest): boolean {
   return request.nextUrl.pathname.startsWith('/api/');
 }
 
-function isAuthorizedSleepRequest(request: NextRequest): boolean {
-  if (
-    request.method !== 'POST' ||
-    !['/api/sleep', '/api/dream/run'].includes(request.nextUrl.pathname)
-  ) {
-    return false;
-  }
-
+// Machine callers only, and only with a configured secret that matches exactly.
+// A missing/empty secret never authorizes, and no header authorizes on its own.
+function hasValidCronSecret(request: NextRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
-  const authorization = request.headers.get('authorization');
+  if (!cronSecret) return false;
+  const authorization = request.headers.get('authorization') ?? '';
+  return authorization === `Bearer ${cronSecret}`;
+}
 
-  return Boolean(
-    cronSecret && authorization === `Bearer ${cronSecret}`,
-  );
+// /api/sleep     — GET or POST, secret required (scheduled and manual machine callers)
+// /api/dream/run — POST only, secret required (unchanged)
+function isAuthorizedSecretRequest(request: NextRequest): boolean {
+  if (!hasValidCronSecret(request)) return false;
+
+  const path = request.nextUrl.pathname;
+  if (path === '/api/sleep') {
+    return request.method === 'GET' || request.method === 'POST';
+  }
+  if (path === '/api/dream/run') {
+    return request.method === 'POST';
+  }
+  return false;
 }
 
 function denyUnauthenticatedRequest(request: NextRequest): NextResponse {
@@ -35,7 +43,7 @@ function denyUnauthenticatedRequest(request: NextRequest): NextResponse {
 }
 
 export function middleware(request: NextRequest) {
-  if (isAuthorizedSleepRequest(request)) {
+  if (isAuthorizedSecretRequest(request)) {
     return NextResponse.next();
   }
 
