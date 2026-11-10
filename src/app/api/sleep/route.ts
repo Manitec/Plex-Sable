@@ -3,7 +3,12 @@ import Groq from 'groq-sdk';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
-import { recordSleepPersistence, updateSedimentStateWithOutcome } from '@/lib/sleep-state';
+import {
+  recordSleepPersistence,
+  updateSedimentStateWithOutcome,
+  type SleepPersistenceOutcomeCode,
+  type StateOutcomeCode,
+} from '@/lib/sleep-state';
 
 const OWNER = 'Manitec';
 const REPO = 'plex';
@@ -15,6 +20,19 @@ const SEDIMENT_LOOKBACK = 5;
 
 type SleepMode = 'dreamless' | 'dream' | 'nightmare';
 type SleepSource = 'cron' | 'manual';
+
+// Fixed-shape, sanitized runtime diagnostic. Codes only: no outcome messages,
+// model text, excerpts, memory/history, exception messages, headers or
+// credentials. Both values are runtime-allowlisted before they reach here.
+type SleepDiagnosticEvent = {
+  event: 'sleep.diagnostics';
+  version: 1;
+  date: string;
+  mode: SleepMode;
+  source: SleepSource;
+  state_outcome: StateOutcomeCode;
+  sleep_persistence_outcome: SleepPersistenceOutcomeCode;
+};
 
 // ─── Dream probability config ────────────────────────────────────────────────
 const DREAM_PROB = {
@@ -558,6 +576,19 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     }).catch(() => {});
   }
   log.push(`step 8: dream trigger — ${dreaming ? 'fired' : 'skipped'}`);
+
+  // One sanitized event per completed invocation, after state and sleep-document
+  // processing. Emitted whether or not either write confirmed. Exits before this
+  // point (auth, missing token, model failure, clear_sleep) emit no event.
+  console.info('[sleep-diag]', {
+    event: 'sleep.diagnostics',
+    version: 1,
+    date: today,
+    mode,
+    source,
+    state_outcome: stateResult.outcome.code,
+    sleep_persistence_outcome: sleepPersistenceOutcome.code,
+  } satisfies SleepDiagnosticEvent);
 
   return NextResponse.json({
     ok: true,
