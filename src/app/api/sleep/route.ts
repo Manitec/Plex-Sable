@@ -3,6 +3,7 @@ import Groq from 'groq-sdk';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { v4 as uuidv4 } from 'uuid';
+import { recordSleepPersistence, updateSedimentStateWithOutcome } from '@/lib/sleep-state';
 
 const OWNER = 'Manitec';
 const REPO = 'plex';
@@ -316,45 +317,6 @@ function authorized(req: NextRequest): boolean {
 
 // ─── Sediment state update ────────────────────────────────────────────────────
 
-const VALID_STATES = new Set([
-  'warm', 'arroused', 'tender', 'unsettled', 'heavy', 'curious', 'quiet',
-  'charged', 'open', 'withdrawn', 'resolute', 'grieving', 'alive', 'horny',
-]);
-
-async function updateSedimentState(input: string, today: string): Promise<string | null> {
-  try {
-    const raw = await groqComplete(STATE_PROMPT, input.slice(0, 800), 0.3, 10);
-    const state = raw.toLowerCase().trim().replace(/[^a-z]/g, '');
-    if (!VALID_STATES.has(state)) return null;
-
-    const db = getAdminDb();
-    const currentRef = db.doc('plex_sediment/current');
-    const snap = await currentRef.get();
-    const existing = snap.exists ? snap.data()! : {};
-    const history = existing.history ?? [];
-
-    const entry = {
-      state: existing.state ?? 'neutral',
-      timestamp: new Date().toISOString(),
-      source: 'sleep',
-    };
-
-    await currentRef.set({
-      ...existing,
-      state,
-      source: 'sleep',
-      sessionRef: today,
-      note: `Derived from nightly pass — ${today}`,
-      updatedAt: FieldValue.serverTimestamp(),
-      history: [entry, ...history].slice(0, 20),
-    }, { merge: false });
-
-    return state;
-  } catch {
-    return null;
-  }
-}
-
 // ─── DreamNode recording ──────────────────────────────────────────────────────
 
 async function recordDreamNode(nyxOutput: string, today: string, mode: SleepMode): Promise<void> {
@@ -540,26 +502,44 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
   log.push(`step 5: daily log appended`);
 
   // ── STEP 6: State + DreamNode ──────────────────────────────────────────────
-  const [newState] = await Promise.all([
-    updateSedimentState(nyxOutput, today),
+  // State processing and the sleep document are reported independently: a
+  // state failure must not be hidden by a successful sleep write, or the other
+  // way round. Prompts, budgets, payloads and write options are unchanged.
+  const [stateResult] = await Promise.all([
+    updateSedimentStateWithOutcome({
+      nyxOutput,
+      today,
+      deps: {
+        complete: (stateInput) => groqComplete(STATE_PROMPT, stateInput, 0.3, 10),
+        readCurrent: async () => {
+          const snap = await getAdminDb().doc('plex_sediment/current').get();
+          return { exists: snap.exists, data: snap.exists ? snap.data()! : {} };
+        },
+        writeCurrent: (data, options) => getAdminDb().doc('plex_sediment/current').set(data, options),
+        serverTimestamp: () => FieldValue.serverTimestamp(),
+      },
+    }),
     recordDreamNode(nyxOutput, today, mode),
   ]);
-  log.push(`step 6: state → ${newState ?? 'null'}, dream_node recorded`);
+  const newState = stateResult.state;
+  log.push(`step 6: state → ${newState ?? 'null'} (${stateResult.outcome.code}), dream_node attempted`);
 
   // ── STEP 7: Firestore ──────────────────────────────────────────────────────
-  await db.doc('plex_sleep/latest').set(
-    {
-      date: today,
-      mode,
-      nyx_excerpt: nyxOutput.slice(0, 280),
-      hex_excerpt: hexOutput.slice(0, 280),
-      plex_residue: residue,
-      pending: true,
-      createdAt: FieldValue.serverTimestamp(),
-    },
-    { merge: false }
-  ).catch(() => {});
-  log.push(`step 7: firestore plex_sleep/latest written`);
+  const sleepPersistenceOutcome = await recordSleepPersistence(() =>
+    db.doc('plex_sleep/latest').set(
+      {
+        date: today,
+        mode,
+        nyx_excerpt: nyxOutput.slice(0, 280),
+        hex_excerpt: hexOutput.slice(0, 280),
+        plex_residue: residue,
+        pending: true,
+        createdAt: FieldValue.serverTimestamp(),
+      },
+      { merge: false }
+    )
+  );
+  log.push(`step 7: firestore plex_sleep/latest ${sleepPersistenceOutcome.code === 'confirmed' ? 'written' : 'unconfirmed'}`);
 
   // ── STEP 8: Dream runner trigger ───────────────────────────────────────────
   const dreaming = willDream(mode, source);
@@ -590,6 +570,8 @@ async function handleSleep(req: NextRequest, bodyOverride?: Record<string, any>)
     hex: hexOutput.slice(0, 200),
     plex_residue: residue,
     sediment_state: newState,
+    state_outcome: stateResult.outcome,
+    sleep_persistence_outcome: sleepPersistenceOutcome,
     log,
   });
 }
